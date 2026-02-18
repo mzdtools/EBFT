@@ -1,6 +1,6 @@
 -- ============================================
--- MzD Hub
--- Fixed: Safe path uses actual standing position
+-- MzD Hub v9.5 - COMPLETE (Core + GUI)
+-- Fixed: High rarity ignores mutation, safe path via wall corridor, faster return
 -- Load: loadstring(game:HttpGet("https://raw.githubusercontent.com/mzdtools/EBFT/main/Escape"))()
 -- ============================================
 getgenv().MzD = {}
@@ -67,7 +67,6 @@ function M.findBase()
 			end
 		end)
 	end
-	-- Auto-set home position to current player position if not set
 	if not M.homePosition then M.setHomePosition() end
 end
 
@@ -94,6 +93,15 @@ function M.tweenTo(cf)
 	tw:Play() tw.Completed:Wait() return true
 end
 
+function M.fastTween(cf)
+	local ch=Player.Character if not ch then return false end
+	local hrp=ch:FindFirstChild("HumanoidRootPart") if not hrp then return false end
+	local d=(hrp.Position-cf.Position).Magnitude
+	local t=math.max(d/9999,0.02)
+	local tw=TweenService:Create(hrp,TweenInfo.new(t,Enum.EasingStyle.Linear),{CFrame=cf})
+	tw:Play() tw.Completed:Wait() return true
+end
+
 function M.returnToBase()
 	local home=M.getHomePosition()
 	M.tweenTo(home) task.wait(0.1)
@@ -114,55 +122,51 @@ function M.tweenToSlot(slotNumber)
 	return false
 end
 
--- ========== SAFE TWEEN (uses home position as corridor) ==========
+-- ========== SAFE TWEEN (via wall corridor) ==========
+-- The MzD walls are at Z = +175 and Z = -175 (MAP_FLOOR_WIDTH/2 = 175)
+-- We fly along Z = homePosition.Z which is INSIDE the walls near the base
+-- Route: up -> to home Z corridor -> slide X -> to target Z -> drop to target
 function M.safePathTo(targetCFrame)
 	local ch=Player.Character if not ch then return false end
 	local hrp=ch:FindFirstChild("HumanoidRootPart") if not hrp then return false end
 	local home=M.getHomePosition()
 	local homePos=home.Position
 	local SAFE_Z=homePos.Z
-	local SAFE_Y=homePos.Y+4
+	local SAFE_Y=homePos.Y+5
 	local startPos=hrp.Position
 	local endPos=targetCFrame.Position
-	-- Step 1: Go up to safe Y at current position
-	M.tweenTo(CFrame.new(startPos.X,SAFE_Y,startPos.Z))
-	task.wait(0.05)
-	-- Step 2: Move to home Z corridor (along the base wall)
-	M.tweenTo(CFrame.new(startPos.X,SAFE_Y,SAFE_Z))
-	task.wait(0.05)
-	-- Step 3: Slide along corridor to target X
-	M.tweenTo(CFrame.new(endPos.X,SAFE_Y,SAFE_Z))
-	task.wait(0.05)
-	-- Step 4: Move from corridor to target Z
-	M.tweenTo(CFrame.new(endPos.X,SAFE_Y,endPos.Z))
-	task.wait(0.05)
-	-- Step 5: Drop to target
+	-- All corridor movement at max speed
+	M.fastTween(CFrame.new(startPos.X,SAFE_Y,startPos.Z))
+	task.wait(0.02)
+	M.fastTween(CFrame.new(startPos.X,SAFE_Y,SAFE_Z))
+	task.wait(0.02)
+	M.fastTween(CFrame.new(endPos.X,SAFE_Y,SAFE_Z))
+	task.wait(0.02)
+	M.fastTween(CFrame.new(endPos.X,SAFE_Y,endPos.Z))
+	task.wait(0.02)
+	-- Final approach at normal speed
 	M.tweenTo(targetCFrame)
-	task.wait(0.05)
+	task.wait(0.02)
 	return true
 end
 
-function M.safePathTo(targetCFrame)
-	local ch=Player.Character if not ch then return false end
-	local hrp=ch:FindFirstChild("HumanoidRootPart") if not hrp then return false end
+function M.safeReturnToBase()
 	local home=M.getHomePosition()
+	local ch=Player.Character if not ch then return end
+	local hrp=ch:FindFirstChild("HumanoidRootPart") if not hrp then return end
 	local homePos=home.Position
 	local SAFE_Z=homePos.Z
-	local SAFE_Y=homePos.Y+4
-	local startPos=hrp.Position
-	local endPos=targetCFrame.Position
-	local origSpeed=M.S.TweenSpeed
-	M.S.TweenSpeed=math.max(origSpeed,5000)
-	M.tweenTo(CFrame.new(startPos.X,SAFE_Y,SAFE_Z))
+	local SAFE_Y=homePos.Y+5
+	local curPos=hrp.Position
+	-- All at max speed
+	M.fastTween(CFrame.new(curPos.X,SAFE_Y,curPos.Z))
 	task.wait(0.02)
-	M.tweenTo(CFrame.new(endPos.X,SAFE_Y,SAFE_Z))
+	M.fastTween(CFrame.new(curPos.X,SAFE_Y,SAFE_Z))
 	task.wait(0.02)
-	M.tweenTo(CFrame.new(endPos.X,SAFE_Y,endPos.Z))
+	M.fastTween(CFrame.new(homePos.X,SAFE_Y,SAFE_Z))
 	task.wait(0.02)
-	M.S.TweenSpeed=origSpeed
-	M.tweenTo(targetCFrame)
-	task.wait(0.02)
-	return true
+	M.fastTween(home)
+	task.wait(0.05)
 end
 
 function M.isHighRarity(r) return HIGH_RARITIES[r]==true end
@@ -264,10 +268,15 @@ function M.getBrainrotNamesMulti(rarities)
 	table.sort(names) return names
 end
 
+-- FIXED: High rarity (Celestial/Divine/Infinity) ALWAYS matches regardless of mutation
 function M.matchesFilter(b,folderRarity)
+	if not M.rarityMatches(folderRarity) then return false end
+
+	-- HIGH RARITY = always grab, ignore mutation and name filters
+	if M.isHighRarity(folderRarity) then return true end
+
 	local mut=b:GetAttribute("Mutation") or "None"
 	local isNone=(mut:lower()=="none" or mut=="")
-	if not M.rarityMatches(folderRarity) then return false end
 	if M.S.TargetMutation=="None" then if not isNone then return false end
 	elseif M.S.TargetMutation~="Any" then if mut~=M.S.TargetMutation then return false end end
 	if #M.S.SelectedBrainrots>0 then
@@ -286,6 +295,14 @@ function M.toolMatchesRarity(tool,targetRarity,targetMutation)
 	local toolRarity=tool:GetAttribute("Rarity")
 	if not bName or bName=="" then return false end
 	if lvl>=M.S.MaxLevel then return false end
+
+	-- High rarity tools always match
+	if toolRarity and M.isHighRarity(toolRarity) then
+		local tR=type(targetRarity)=="table" and targetRarity or {targetRarity}
+		for _,r in pairs(tR) do if r=="Any" or r==toolRarity then return true end end
+		return false
+	end
+
 	if targetMutation=="None" then if not(tMut:lower()=="none" or tMut=="") then return false end
 	elseif targetMutation~="Any" then if tMut~=targetMutation then return false end end
 	local tR=type(targetRarity)=="table" and targetRarity or {targetRarity}
@@ -316,6 +333,24 @@ function M.findTargetToolInBackpack()
 			if not eq:GetAttribute("Locked") then return eq end
 		end
 	end
+	return nil
+end
+
+-- ========== FIND ROOT HELPER ==========
+function M.findBrainrotRoot(b)
+	local root=b:FindFirstChild("Root")
+	if root and root:IsA("BasePart") then return root end
+	-- Check inside RenderedBrainrot child
+	local rendered=b:FindFirstChild("RenderedBrainrot")
+	if rendered then
+		local rr=rendered:FindFirstChild("Root")
+		if rr and rr:IsA("BasePart") then return rr end
+	end
+	-- Any BasePart descendant
+	for _,desc in pairs(b:GetDescendants()) do
+		if desc:IsA("BasePart") then return desc end
+	end
+	if b:IsA("BasePart") then return b end
 	return nil
 end
 
@@ -401,16 +436,12 @@ end
 function M.startFarming()
 	if M.farmThread then return end
 	M.S.Farming=true M.Status.farmCount=0
-	-- Set home position before starting
 	M.setHomePosition()
 	M.returnToBase()
 	M.farmThread=task.spawn(function()
 		while M.S.Farming do
 			local ok,err=pcall(function()
-				if M.isDead() then M.Status.farm="Dead! Waiting..." M.waitForRespawn() task.wait(0.5)
-					-- Re-set home after respawn
-					task.wait(1) M.setHomePosition() return
-				end
+				if M.isDead() then M.Status.farm="Dead! Waiting..." M.waitForRespawn() task.wait(1) M.setHomePosition() task.wait(0.5) return end
 				local ch=Player.Character local hum=ch and ch:FindFirstChild("Humanoid")
 				if not ch or not hum then task.wait(1) return end
 				if not M.baseGUID then M.findBase() end
@@ -426,8 +457,8 @@ function M.startFarming()
 							if folder:IsA("Folder") and M.rarityMatches(folder.Name) then
 								for _,b in pairs(folder:GetChildren()) do
 									if not M.S.Farming or M.isDead() then break end
-									if b.Name=="RenderedBrainrot" and M.matchesFilter(b,folder.Name) then
-										local root=b:FindFirstChild("Root") if not root then continue end
+									if M.matchesFilter(b,folder.Name) then
+										local root=M.findBrainrotRoot(b) if not root then continue end
 										M.Status.farm="Going to "..folder.Name.."..."
 										M.safePathTo(root.CFrame*CFrame.new(0,0,-3))
 										for attempt=1,5 do
@@ -439,11 +470,13 @@ function M.startFarming()
 												if root and root.Parent then M.safePathTo(root.CFrame*CFrame.new(0,0,-3)) else break end
 											end
 											if root and root.Parent then
-												M.Status.farm="Grabbing..."
-												M.forceGrabPrompt(root) task.wait(0.5) M.Status.farmCount+=1 break
+												M.Status.farm="Grabbing "..folder.Name.."..."
+												M.forceGrabPrompt(root)
+												M.forceGrabPrompt(b)
+												task.wait(0.5) M.Status.farmCount+=1 break
 											else break end
 										end
-										pcall(function() hum:UnequipTools() end) task.wait(0.2)
+										pcall(function() hum:UnequipTools() end) task.wait(0.1)
 										M.safeReturnToBase()
 									end
 								end
@@ -453,6 +486,7 @@ function M.startFarming()
 					task.wait(1) return
 				end
 
+				-- COLLECT, PLACE & MAX MODE
 				if not M.isSlotEmpty(ws) then
 					M.Status.farm="Clearing slot "..ws
 					M.pickUpBrainrot(ws) task.wait(0.5) pcall(function() hum:UnequipTools() end) task.wait(0.3)
@@ -469,8 +503,8 @@ function M.startFarming()
 							if folder:IsA("Folder") and M.rarityMatches(folder.Name) then
 								for _,b in pairs(folder:GetChildren()) do
 									if not M.S.Farming or M.isDead() then break end
-									if b.Name=="RenderedBrainrot" and M.matchesFilter(b,folder.Name) then
-										local root=b:FindFirstChild("Root") if not root then continue end
+									if M.matchesFilter(b,folder.Name) then
+										local root=M.findBrainrotRoot(b) if not root then continue end
 										found=true
 										M.Status.farm="Fetching "..folder.Name.."..."
 										M.safePathTo(root.CFrame*CFrame.new(0,0,-3))
@@ -483,10 +517,12 @@ function M.startFarming()
 												if root and root.Parent then M.safePathTo(root.CFrame*CFrame.new(0,0,-3)) else found=false break end
 											end
 											if root and root.Parent then
-												M.forceGrabPrompt(root) task.wait(0.8) M.Status.farmCount+=1 break
+												M.forceGrabPrompt(root)
+												M.forceGrabPrompt(b)
+												task.wait(0.8) M.Status.farmCount+=1 break
 											else found=false break end
 										end
-										pcall(function() hum:UnequipTools() end) task.wait(0.3)
+										pcall(function() hum:UnequipTools() end) task.wait(0.1)
 										M.safeReturnToBase() break
 									end
 								end
@@ -819,7 +855,6 @@ end
 
 function M.startLuckyBlockFarm()
 	if M.luckyBlockThread then return end M.S.LuckyBlockEnabled=true M.Status.luckyBlockCount=0 M.Status.luckyBlock="Starting..."
-	-- Set home position before starting
 	M.setHomePosition()
 	M.luckyBlockThread=task.spawn(function() while M.S.LuckyBlockEnabled do
 		local ok,err=pcall(function()
@@ -842,8 +877,8 @@ function M.startLuckyBlockFarm()
 							if rootPart and rootPart.Parent then M.safePathTo(rootPart.CFrame*CFrame.new(0,3,0)) else foundBlock=false break end
 						end
 						if rootPart and rootPart.Parent then
-							M.Status.luckyBlock="Opening "..rarityName.."..." M.forceGrabPrompt(block) task.wait(0.5)
-							if not block.Parent or not rootPart.Parent then M.Status.luckyBlockCount+=1 M.Status.luckyBlock=rarityName.." opened! (#"..M.Status.luckyBlockCount..")" break end
+							M.Status.luckyBlock="Opening "..rarityName.."..."
+							M.forceGrabPrompt(block) task.wait(0.3)
 							M.forceGrabPrompt(rootPart) task.wait(0.3)
 							if not block.Parent or not rootPart.Parent then M.Status.luckyBlockCount+=1 M.Status.luckyBlock=rarityName.." opened! (#"..M.Status.luckyBlockCount..")" break end
 						else break end
@@ -1033,7 +1068,7 @@ function M.stopMapFixer()
 	M.S.MapFixerEnabled=false if M.mapFixerThread then pcall(task.cancel,M.mapFixerThread) M.mapFixerThread=nil end M.Status.mapFixer="Off"
 end
 
-print("[MzD Hub] Core v9.4 Loaded")
+print("[MzD Hub] Core v9.5 Loaded")
 
 -- ============================================
 -- GUI
@@ -1072,7 +1107,7 @@ RDD:OnChanged(function(v) local s={} for n,on in pairs(v) do if on then table.in
 end)
 BDD=FT:AddDropdown("FarmBrainrots",{Title="Brainrots",Description="Empty = all",Values=M.getBrainrotNamesMulti(M.S.TargetRarity),Default={},Multi=true})
 BDD:OnChanged(function(v) local s={} for n,on in pairs(v) do if on then table.insert(s,n) end end M.S.SelectedBrainrots=s end)
-FT:AddDropdown("FarmMutation",{Title="Mutation Filter",Values=MUT,Default=M.S.TargetMutation,Multi=false}):OnChanged(function(v) M.S.TargetMutation=v end)
+FT:AddDropdown("FarmMutation",{Title="Mutation Filter",Description="Ignored for Celestial/Divine/Infinity",Values=MUT,Default=M.S.TargetMutation,Multi=false}):OnChanged(function(v) M.S.TargetMutation=v end)
 FT:AddParagraph({Title="⚡ Farm Actions",Content=""})
 FT:AddDropdown("FarmMode",{Title="Farm Mode",Values=FM,Default=M.S.FarmMode,Multi=false}):OnChanged(function(v) M.S.FarmMode=v end)
 FT:AddDropdown("FarmSlot",{Title="Work Slot",Values=SL,Default=M.S.FarmSlot,Multi=false}):OnChanged(function(v) M.S.FarmSlot=v end)
@@ -1156,7 +1191,7 @@ CT:AddButton({Title="🏠 Re-find Base",Callback=function() M.findBase() Fluent:
 CT:AddButton({Title="📍 Set Home Position",Description="Sets return point to where you stand now",Callback=function()
 	M.setHomePosition()
 	local hp=M.homePosition and M.homePosition.Position
-	if hp then Fluent:Notify({Title="MzD",Content=string.format("Home set: X:%.1f Y:%.1f Z:%.1f",hp.X,hp.Y,hp.Z),Duration=5})
+	if hp then Fluent:Notify({Title="MzD",Content=string.format("Home: X:%.1f Y:%.1f Z:%.1f",hp.X,hp.Y,hp.Z),Duration=5})
 	else Fluent:Notify({Title="MzD",Content="Failed!",Duration=3}) end
 end})
 CT:AddButton({Title="📋 Show Slots",Callback=function() M.findBase() local o=M.findOccupiedSlots()
@@ -1167,10 +1202,31 @@ end})
 CT:AddButton({Title="🗑️ Clear Work Slot",Callback=function() M.findBase() M.clearSlot(tonumber(M.S.FarmSlot) or 5) end})
 CT:AddButton({Title="🏠 Return to Base",Callback=function() M.findBase() M.returnToBase() end})
 CT:AddButton({Title="🎲 Scan LB Types",Callback=function() Fluent:Notify({Title="LB Types",Content=table.concat(M.scanLuckyBlockTypes(),", "),Duration=6}) end})
+CT:AddButton({Title="🔍 Debug Brainrots",Description="Show ActiveBrainrots structure",Callback=function()
+	if not M.ActiveBrainrots then M.ActiveBrainrots=workspace:FindFirstChild("ActiveBrainrots") end
+	if not M.ActiveBrainrots then Fluent:Notify({Title="Debug",Content="No ActiveBrainrots!",Duration=5}) return end
+	local info=""
+	for _,folder in pairs(M.ActiveBrainrots:GetChildren()) do
+		local count=0 for _,b in pairs(folder:GetChildren()) do count+=1 end
+		if count>0 then
+			info=info..folder.Name..": "..count.."\n"
+			for _,b in pairs(folder:GetChildren()) do
+				local bName=b:GetAttribute("BrainrotName") or b.Name
+				local mut=b:GetAttribute("Mutation") or "None"
+				local hasRoot=M.findBrainrotRoot(b) and "✓" or "✗"
+				info=info.."  [Root:"..hasRoot.."] "..bName
+				if mut~="None" and mut~="" then info=info.." ("..mut..")" end
+				info=info.."\n"
+			end
+		end
+	end
+	if info=="" then info="Empty!" end
+	Fluent:Notify({Title="ActiveBrainrots",Content=info,Duration=15})
+end})
 
 local homeP=M.homePosition and M.homePosition.Position
 local homeStr=homeP and string.format("X:%.1f Y:%.1f Z:%.1f",homeP.X,homeP.Y,homeP.Z) or "Not set"
-local IP=CT:AddParagraph({Title="MzD Hub v9.4",Content="Player: "..Player.Name.."\nBase: "..(M.baseGUID or "?").."\nHome: "..homeStr.."\n✦"})
+local IP=CT:AddParagraph({Title="MzD Hub v9.5",Content="Player: "..Player.Name.."\nBase: "..(M.baseGUID or "?").."\nHome: "..homeStr.."\n✦"})
 
 -- SETTINGS TAB
 local ST=W:AddTab({Title="Settings",Icon="shield"})
@@ -1207,5 +1263,5 @@ end) end end)
 
 task.spawn(function() task.wait(1) M.findBase() if M.baseGUID then Fluent:Notify({Title="MzD",Content="Base: "..M.baseGUID,Duration=3}) end end)
 W:SelectTab(1)
-Fluent:Notify({Title="MzD Hub v9.4",Content="Loaded! RightCtrl = minimize ✦",Duration=5})
-print("[MzD Hub] v9.4 COMPLETE ✦")
+Fluent:Notify({Title="MzD Hub v9.5",Content="Loaded! RightCtrl = minimize ✦",Duration=5})
+print("[MzD Hub] v9.5 COMPLETE ✦")
