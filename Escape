@@ -1,7 +1,7 @@
 -- ============================================
--- MzD Hub v9.3 - COMPLETE (Core + GUI)
--- Host dit op GitHub/Pastebin
--- Load met: loadstring(game:HttpGet("URL"))()
+-- MzD Hub
+-- Fixed: Safe path uses actual standing position
+-- Load: loadstring(game:HttpGet("https://raw.githubusercontent.com/mzdtools/EBFT/main/Escape"))()
 -- ============================================
 getgenv().MzD = {}
 local M = getgenv().MzD
@@ -44,7 +44,7 @@ M.Status = {
 	luckyBlock="Idle",luckyBlockCount=0,
 }
 
-M.baseGUID=nil M.baseCFrame=nil M.farmThread=nil M.factoryThread=nil
+M.baseGUID=nil M.baseCFrame=nil M.homePosition=nil M.farmThread=nil M.factoryThread=nil
 M.moneyThread=nil M.moneyRemoteThread=nil M.afkThread=nil M._afkSteppedConn=nil
 M._instantConn=nil M.placeThread=nil M.upgradeThread=nil
 M.valentineThread=nil M.valentineCollectorConn=nil M.valentineTurboThread=nil
@@ -67,7 +67,22 @@ function M.findBase()
 			end
 		end)
 	end
+	-- Auto-set home position to current player position if not set
+	if not M.homePosition then M.setHomePosition() end
 end
+
+function M.setHomePosition()
+	local ch=Player.Character if not ch then return end
+	local hrp=ch:FindFirstChild("HumanoidRootPart") if not hrp then return end
+	M.homePosition=hrp.CFrame
+end
+
+function M.getHomePosition()
+	if M.homePosition then return M.homePosition end
+	if M.baseCFrame then return M.baseCFrame end
+	return CFrame.new(124, 3.8, 22)
+end
+
 task.spawn(function() task.wait(3) M.findBase() end)
 
 function M.tweenTo(cf)
@@ -80,8 +95,8 @@ function M.tweenTo(cf)
 end
 
 function M.returnToBase()
-	if not M.baseCFrame then M.findBase() end
-	if M.baseCFrame then M.tweenTo(M.baseCFrame) task.wait(0.1) end
+	local home=M.getHomePosition()
+	M.tweenTo(home) task.wait(0.1)
 end
 
 function M.tweenToSlot(slotNumber)
@@ -99,43 +114,53 @@ function M.tweenToSlot(slotNumber)
 	return false
 end
 
--- ========== SAFE TWEEN ==========
+-- ========== SAFE TWEEN (uses home position as corridor) ==========
 function M.safePathTo(targetCFrame)
 	local ch=Player.Character if not ch then return false end
 	local hrp=ch:FindFirstChild("HumanoidRootPart") if not hrp then return false end
-	if not M.baseCFrame then M.findBase() end
-	local basePos=M.baseCFrame and M.baseCFrame.Position or Vector3.new(124,4,22)
-	local SAFE_Z=basePos.Z
-	local SAFE_Y=basePos.Y+4
+	local home=M.getHomePosition()
+	local homePos=home.Position
+	local SAFE_Z=homePos.Z
+	local SAFE_Y=homePos.Y+4
 	local startPos=hrp.Position
 	local endPos=targetCFrame.Position
+	-- Step 1: Go up to safe Y at current position
+	M.tweenTo(CFrame.new(startPos.X,SAFE_Y,startPos.Z))
+	task.wait(0.05)
+	-- Step 2: Move to home Z corridor (along the base wall)
 	M.tweenTo(CFrame.new(startPos.X,SAFE_Y,SAFE_Z))
 	task.wait(0.05)
+	-- Step 3: Slide along corridor to target X
 	M.tweenTo(CFrame.new(endPos.X,SAFE_Y,SAFE_Z))
 	task.wait(0.05)
+	-- Step 4: Move from corridor to target Z
 	M.tweenTo(CFrame.new(endPos.X,SAFE_Y,endPos.Z))
 	task.wait(0.05)
+	-- Step 5: Drop to target
 	M.tweenTo(targetCFrame)
 	task.wait(0.05)
 	return true
 end
 
 function M.safeReturnToBase()
-	if not M.baseCFrame then M.findBase() end
-	if not M.baseCFrame then return end
+	local home=M.getHomePosition()
 	local ch=Player.Character if not ch then return end
 	local hrp=ch:FindFirstChild("HumanoidRootPart") if not hrp then return end
-	local basePos=M.baseCFrame.Position
-	local SAFE_Z=basePos.Z
-	local SAFE_Y=basePos.Y+4
+	local homePos=home.Position
+	local SAFE_Z=homePos.Z
+	local SAFE_Y=homePos.Y+4
 	local curPos=hrp.Position
+	-- Step 1: Go up
 	M.tweenTo(CFrame.new(curPos.X,SAFE_Y,curPos.Z))
 	task.wait(0.05)
+	-- Step 2: Move to home Z corridor
 	M.tweenTo(CFrame.new(curPos.X,SAFE_Y,SAFE_Z))
 	task.wait(0.05)
-	M.tweenTo(CFrame.new(basePos.X,SAFE_Y,SAFE_Z))
+	-- Step 3: Slide to home X
+	M.tweenTo(CFrame.new(homePos.X,SAFE_Y,SAFE_Z))
 	task.wait(0.05)
-	M.tweenTo(M.baseCFrame)
+	-- Step 4: Drop to home
+	M.tweenTo(home)
 	task.wait(0.1)
 end
 
@@ -374,11 +399,17 @@ end
 -- ========== FARMING ==========
 function M.startFarming()
 	if M.farmThread then return end
-	M.S.Farming=true M.Status.farmCount=0 M.returnToBase()
+	M.S.Farming=true M.Status.farmCount=0
+	-- Set home position before starting
+	M.setHomePosition()
+	M.returnToBase()
 	M.farmThread=task.spawn(function()
 		while M.S.Farming do
 			local ok,err=pcall(function()
-				if M.isDead() then M.Status.farm="Dead! Waiting..." M.waitForRespawn() task.wait(0.5) return end
+				if M.isDead() then M.Status.farm="Dead! Waiting..." M.waitForRespawn() task.wait(0.5)
+					-- Re-set home after respawn
+					task.wait(1) M.setHomePosition() return
+				end
 				local ch=Player.Character local hum=ch and ch:FindFirstChild("Humanoid")
 				if not ch or not hum then task.wait(1) return end
 				if not M.baseGUID then M.findBase() end
@@ -402,7 +433,7 @@ function M.startFarming()
 											if not M.S.Farming then break end
 											if M.isDead() then
 												M.Status.farm="Died! Retry #"..attempt
-												M.waitForRespawn()
+												M.waitForRespawn() task.wait(1) M.setHomePosition()
 												if not M.S.Farming then break end
 												if root and root.Parent then M.safePathTo(root.CFrame*CFrame.new(0,0,-3)) else break end
 											end
@@ -446,7 +477,7 @@ function M.startFarming()
 											if not M.S.Farming then break end
 											if M.isDead() then
 												M.Status.farm="Died! Retry #"..attempt
-												M.waitForRespawn()
+												M.waitForRespawn() task.wait(1) M.setHomePosition()
 												if not M.S.Farming then break end
 												if root and root.Parent then M.safePathTo(root.CFrame*CFrame.new(0,0,-3)) else found=false break end
 											end
@@ -787,9 +818,11 @@ end
 
 function M.startLuckyBlockFarm()
 	if M.luckyBlockThread then return end M.S.LuckyBlockEnabled=true M.Status.luckyBlockCount=0 M.Status.luckyBlock="Starting..."
+	-- Set home position before starting
+	M.setHomePosition()
 	M.luckyBlockThread=task.spawn(function() while M.S.LuckyBlockEnabled do
 		local ok,err=pcall(function()
-			if M.isDead() then M.Status.luckyBlock="Dead! Waiting..." M.waitForRespawn() task.wait(0.5) return end
+			if M.isDead() then M.Status.luckyBlock="Dead! Waiting..." M.waitForRespawn() task.wait(1) M.setHomePosition() task.wait(0.5) return end
 			if not M.ActiveLuckyBlocks then M.ActiveLuckyBlocks=workspace:FindFirstChild("ActiveLuckyBlocks") end
 			if not M.ActiveLuckyBlocks then M.Status.luckyBlock="No folder!" task.wait(3) return end
 			local ch=Player.Character local hum=ch and ch:FindFirstChild("Humanoid") if not ch or not hum then task.wait(1) return end
@@ -803,7 +836,7 @@ function M.startLuckyBlockFarm()
 					M.safePathTo(rootPart.CFrame*CFrame.new(0,3,0))
 					for attempt=1,5 do
 						if not M.S.LuckyBlockEnabled then break end
-						if M.isDead() then M.Status.luckyBlock="Died! Retry #"..attempt M.waitForRespawn()
+						if M.isDead() then M.Status.luckyBlock="Died! Retry #"..attempt M.waitForRespawn() task.wait(1) M.setHomePosition()
 							if not M.S.LuckyBlockEnabled then break end
 							if rootPart and rootPart.Parent then M.safePathTo(rootPart.CFrame*CFrame.new(0,3,0)) else foundBlock=false break end
 						end
@@ -999,10 +1032,10 @@ function M.stopMapFixer()
 	M.S.MapFixerEnabled=false if M.mapFixerThread then pcall(task.cancel,M.mapFixerThread) M.mapFixerThread=nil end M.Status.mapFixer="Off"
 end
 
-print("[MzD Hub] Core v9.3 Loaded")
+print("[MzD Hub] Core v9.4 Loaded")
 
 -- ============================================
--- GUI START
+-- GUI
 -- ============================================
 task.wait(0.5)
 
@@ -1027,7 +1060,7 @@ local SPM={["200"]=200,["500"]=500,["1000"]=1000,["2000"]=2000,["5000"]=5000,["I
 local W=Fluent:CreateWindow({Title="MzD Hub",SubTitle="Escape Tsunami From Brainrot",TabWidth=160,Size=UDim2.fromOffset(580,480),Acrylic=true,Theme="Dark",MinimizeKey=Enum.KeyCode.RightControl})
 
 -- FARM TAB
-local FT=W:AddTab({Title="Farm",Icon="tractor"})
+local FT=W:AddTab({Title="Farm",Icon="swords"})
 FT:AddParagraph({Title="🌾 Brainrot Filters",Content=""})
 local BDD=nil
 local RDD=FT:AddDropdown("FarmRarity",{Title="Target Rarity",Values=RAR,Default={"Common"},Multi=true})
@@ -1048,7 +1081,7 @@ local FSP=FT:AddParagraph({Title="Farm",Content="Idle"})
 local FPP=FT:AddParagraph({Title="Place & Upgrade",Content="Idle"})
 local FTG=FT:AddToggle("FarmToggle",{Title="🚀 Auto Farm",Default=false})
 FTG:OnChanged(function(v) if v then M.findBase() M.startFarming() Fluent:Notify({Title="MzD",Content="Farming started!",Duration=3})
-	else M.stopFarming() Fluent:Notify({Title="MzD",Content="Stopped. Count: "..M.Status.farmCount,Duration=3}) end end)
+	else M.stopFarming() Fluent:Notify({Title="MzD",Content="Stopped. #"..M.Status.farmCount,Duration=3}) end end)
 
 FT:AddParagraph({Title="🎲 Lucky Block Farm",Content=""})
 FT:AddDropdown("LBRarity",{Title="Lucky Block Rarity",Values=LBR,Default={"Common"},Multi=true}):OnChanged(function(v)
@@ -1069,10 +1102,10 @@ end})
 local LBSP=FT:AddParagraph({Title="Lucky Block",Content="Idle"})
 local LBTG=FT:AddToggle("LBToggle",{Title="🎲 Auto Lucky Block Farm",Default=false})
 LBTG:OnChanged(function(v) if v then M.findBase() M.startLuckyBlockFarm() Fluent:Notify({Title="MzD",Content="LB farm started!",Duration=3})
-	else M.stopLuckyBlockFarm() Fluent:Notify({Title="MzD",Content="Stopped. Count: "..M.Status.luckyBlockCount,Duration=3}) end end)
+	else M.stopLuckyBlockFarm() Fluent:Notify({Title="MzD",Content="Stopped. #"..M.Status.luckyBlockCount,Duration=3}) end end)
 
 -- FACTORY TAB
-local FCT=W:AddTab({Title="Factory",Icon="factory"})
+local FCT=W:AddTab({Title="Factory",Icon="hammer"})
 FCT:AddParagraph({Title="🏭 Factory",Content=""})
 FCT:AddDropdown("FactoryRarity",{Title="Target Rarity",Values=FR,Default=M.S.FactoryRarity,Multi=false}):OnChanged(function(v) M.S.FactoryRarity=v end)
 FCT:AddDropdown("FactorySlot",{Title="Work Slot",Values=SL,Default=M.S.FactorySlot,Multi=false}):OnChanged(function(v) M.S.FactorySlot=v end)
@@ -1083,7 +1116,7 @@ FCTG:OnChanged(function(v) if v then M.findBase() M.startFactoryLoop() Fluent:No
 	else M.stopFactoryLoop() Fluent:Notify({Title="MzD",Content="Stopped.",Duration=3}) end end)
 
 -- EVENTS TAB
-local ET=W:AddTab({Title="Events",Icon="calendar-heart"})
+local ET=W:AddTab({Title="Events",Icon="party-popper"})
 ET:AddParagraph({Title="💝 Valentine",Content=""})
 local VSP=ET:AddParagraph({Title="Valentine",Content="Idle"})
 local VTG=ET:AddToggle("ValentineToggle",{Title="💝 Valentine Farm",Default=false})
@@ -1094,7 +1127,7 @@ local ATG=ET:AddToggle("ArcadeToggle",{Title="🕹️ Arcade Collector",Default=
 ATG:OnChanged(function(v) if v then M.startArcade() else M.stopArcade() end end)
 
 -- AUTO TAB
-local AT=W:AddTab({Title="Auto",Icon="rbxassetid://7734068220"})
+local AT=W:AddTab({Title="Auto",Icon="rocket"})
 AT:AddParagraph({Title="💰 Money",Content=""})
 local MSP=AT:AddParagraph({Title="Money",Content="Idle"})
 local MTG=AT:AddToggle("MoneyToggle",{Title="💰 Auto Collect Money",Default=false})
@@ -1115,10 +1148,16 @@ AFKTG:OnChanged(function(v) if v then M.startAFK() else M.stopAFK() end end)
 local AFKSP=AT:AddParagraph({Title="AFK",Content="Off"})
 
 -- CONFIG TAB
-local CT=W:AddTab({Title="Config",Icon="rbxassetid://7734053495"})
+local CT=W:AddTab({Title="Config",Icon="gamepad-2"})
 CT:AddDropdown("TweenSpeed",{Title="Tween Speed",Values=SPD,Default="1000",Multi=false}):OnChanged(function(v) M.S.TweenSpeed=SPM[v] or 1000 end)
 CT:AddButton({Title="🔄 Refresh Brainrots",Callback=function() M.S.SelectedBrainrots={} pcall(function() BDD:SetValues(M.getBrainrotNamesMulti(M.S.TargetRarity)) BDD:SetValue({}) end) end})
 CT:AddButton({Title="🏠 Re-find Base",Callback=function() M.findBase() Fluent:Notify({Title="MzD",Content=M.baseGUID and("Found: "..M.baseGUID) or "Not found!",Duration=3}) end})
+CT:AddButton({Title="📍 Set Home Position",Description="Sets return point to where you stand now",Callback=function()
+	M.setHomePosition()
+	local hp=M.homePosition and M.homePosition.Position
+	if hp then Fluent:Notify({Title="MzD",Content=string.format("Home set: X:%.1f Y:%.1f Z:%.1f",hp.X,hp.Y,hp.Z),Duration=5})
+	else Fluent:Notify({Title="MzD",Content="Failed!",Duration=3}) end
+end})
 CT:AddButton({Title="📋 Show Slots",Callback=function() M.findBase() local o=M.findOccupiedSlots()
 	if #o==0 then Fluent:Notify({Title="Slots",Content="Empty!",Duration=3}) return end
 	local i="" for _,s in pairs(o) do i=i.."Slot "..s.slot..": "..s.name.." Lv."..s.level.."\n" end
@@ -1127,10 +1166,13 @@ end})
 CT:AddButton({Title="🗑️ Clear Work Slot",Callback=function() M.findBase() M.clearSlot(tonumber(M.S.FarmSlot) or 5) end})
 CT:AddButton({Title="🏠 Return to Base",Callback=function() M.findBase() M.returnToBase() end})
 CT:AddButton({Title="🎲 Scan LB Types",Callback=function() Fluent:Notify({Title="LB Types",Content=table.concat(M.scanLuckyBlockTypes(),", "),Duration=6}) end})
-local IP=CT:AddParagraph({Title="MzD Hub v9.3",Content="Player: "..Player.Name.."\nBase: "..(M.baseGUID or "?").."\n✦"})
+
+local homeP=M.homePosition and M.homePosition.Position
+local homeStr=homeP and string.format("X:%.1f Y:%.1f Z:%.1f",homeP.X,homeP.Y,homeP.Z) or "Not set"
+local IP=CT:AddParagraph({Title="MzD Hub v9.4",Content="Player: "..Player.Name.."\nBase: "..(M.baseGUID or "?").."\nHome: "..homeStr.."\n✦"})
 
 -- SETTINGS TAB
-local ST=W:AddTab({Title="Settings",Icon="rbxassetid://7734053495"})
+local ST=W:AddTab({Title="Settings",Icon="shield"})
 SaveManager:SetLibrary(Fluent) InterfaceManager:SetLibrary(Fluent)
 SaveManager:SetFolder("MzDHub") InterfaceManager:SetFolder("MzDHub")
 InterfaceManager:BuildInterfaceSection(ST) SaveManager:BuildConfigSection(ST)
@@ -1157,10 +1199,12 @@ task.spawn(function() while task.wait(0.4) do pcall(function()
 	if not M.S.MapFixerEnabled then pcall(function() if MFTG.Value then MFTG:SetValue(false) end end) end
 	AFKSP:SetDesc("AFK: "..M.Status.afk)
 	if not M.S.AntiAFK then pcall(function() if AFKTG.Value then AFKTG:SetValue(false) end end) end
-	IP:SetDesc("Player: "..Player.Name.."\nBase: "..(M.baseGUID or "?").."\n✦")
+	local hp=M.homePosition and M.homePosition.Position
+	local hs=hp and string.format("X:%.1f Y:%.1f Z:%.1f",hp.X,hp.Y,hp.Z) or "Not set"
+	IP:SetDesc("Player: "..Player.Name.."\nBase: "..(M.baseGUID or "?").."\nHome: "..hs.."\n✦")
 end) end end)
 
 task.spawn(function() task.wait(1) M.findBase() if M.baseGUID then Fluent:Notify({Title="MzD",Content="Base: "..M.baseGUID,Duration=3}) end end)
 W:SelectTab(1)
-Fluent:Notify({Title="MzD Hub v9.3",Content="Loaded! RightCtrl = minimize ✦",Duration=5})
-print("[MzD Hub] v9.3 COMPLETE ✦")
+Fluent:Notify({Title="MzD Hub v9.4",Content="Loaded! RightCtrl = minimize ✦",Duration=5})
+print("[MzD Hub] v9.4 COMPLETE ✦")
