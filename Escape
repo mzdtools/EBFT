@@ -142,26 +142,27 @@ function M.safePathTo(targetCFrame)
 	return true
 end
 
-function M.safeReturnToBase()
+function M.safePathTo(targetCFrame)
+	local ch=Player.Character if not ch then return false end
+	local hrp=ch:FindFirstChild("HumanoidRootPart") if not hrp then return false end
 	local home=M.getHomePosition()
-	local ch=Player.Character if not ch then return end
-	local hrp=ch:FindFirstChild("HumanoidRootPart") if not hrp then return end
 	local homePos=home.Position
 	local SAFE_Z=homePos.Z
 	local SAFE_Y=homePos.Y+4
-	local curPos=hrp.Position
-	-- Step 1: Go up
-	M.tweenTo(CFrame.new(curPos.X,SAFE_Y,curPos.Z))
-	task.wait(0.05)
-	-- Step 2: Move to home Z corridor
-	M.tweenTo(CFrame.new(curPos.X,SAFE_Y,SAFE_Z))
-	task.wait(0.05)
-	-- Step 3: Slide to home X
-	M.tweenTo(CFrame.new(homePos.X,SAFE_Y,SAFE_Z))
-	task.wait(0.05)
-	-- Step 4: Drop to home
-	M.tweenTo(home)
-	task.wait(0.1)
+	local startPos=hrp.Position
+	local endPos=targetCFrame.Position
+	local origSpeed=M.S.TweenSpeed
+	M.S.TweenSpeed=math.max(origSpeed,5000)
+	M.tweenTo(CFrame.new(startPos.X,SAFE_Y,SAFE_Z))
+	task.wait(0.02)
+	M.tweenTo(CFrame.new(endPos.X,SAFE_Y,SAFE_Z))
+	task.wait(0.02)
+	M.tweenTo(CFrame.new(endPos.X,SAFE_Y,endPos.Z))
+	task.wait(0.02)
+	M.S.TweenSpeed=origSpeed
+	M.tweenTo(targetCFrame)
+	task.wait(0.02)
+	return true
 end
 
 function M.isHighRarity(r) return HIGH_RARITIES[r]==true end
@@ -847,7 +848,7 @@ function M.startLuckyBlockFarm()
 							if not block.Parent or not rootPart.Parent then M.Status.luckyBlockCount+=1 M.Status.luckyBlock=rarityName.." opened! (#"..M.Status.luckyBlockCount..")" break end
 						else break end
 					end
-					pcall(function() hum:UnequipTools() end) task.wait(0.3) M.safeReturnToBase() task.wait(0.3) break
+					pcall(function() hum:UnequipTools() end) task.wait(0.1) M.safeReturnToBase() break
 				end
 			end
 			if not foundBlock then M.Status.luckyBlock="No blocks, waiting..." task.wait(2) end
