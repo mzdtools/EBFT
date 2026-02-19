@@ -1,5 +1,6 @@
 -- ============================================
--- MzD Hub v10.0 - VOLLEDIG
+-- MzD Hub v10.1 - VOLLEDIG
+-- Lock fix, ultrafast lucky block, valentine zonder bewegen
 -- ============================================
 getgenv().MzD = {}
 local M = getgenv().MzD
@@ -26,6 +27,37 @@ pcall(function()
         :WaitForChild("Packages", 10)
         :WaitForChild("Net", 10)
         :WaitForChild("RF/Plot.PlotAction", 10)
+end)
+
+-- ========== LOCK REMOTE BLOKKERING ==========
+-- Zoek en blokkeer alle lock/unlock remotes zodat backpack nooit auto-lockt
+task.spawn(function()
+    task.wait(3)
+    pcall(function()
+        local rs = game:GetService("ReplicatedStorage")
+        local function scanAndBlock(parent, depth)
+            if depth > 8 then return end
+            for _, v in pairs(parent:GetChildren()) do
+                local n = v.Name:lower()
+                if n:find("lock") or n:find("unlock") then
+                    if v:IsA("RemoteEvent") then
+                        -- Vervang FireServer zodat lock nooit wordt aangeroepen
+                        local oldFS = v.FireServer
+                        v.FireServer = function(self, ...)
+                            -- Blokkeer lock calls vanuit ons script
+                            -- Maar laat de rest door
+                            warn("[MzD] Lock remote geblokkeerd: " .. v.Name)
+                        end
+                    end
+                end
+                if v:IsA("Folder") or v:IsA("Configuration") then
+                    scanAndBlock(v, depth + 1)
+                end
+                scanAndBlock(v, depth + 1)
+            end
+        end
+        scanAndBlock(rs, 0)
+    end)
 end)
 
 -- ========== SETTINGS ==========
@@ -213,6 +245,49 @@ function M.disableGod()
             if ff:IsA("ForceField") then ff:Destroy() end
         end
     end)
+end
+
+-- ========== SAFE EQUIP - geen lock trigger ==========
+function M.safeEquip(tool)
+    if not tool then return end
+    local ch = Player.Character if not ch then return end
+    local hum = ch:FindFirstChild("Humanoid") if not hum then return end
+    -- Disable tool connections tijdelijk zodat lock scripts niet firen
+    local disabled = {}
+    pcall(function()
+        for _, conn in pairs(getconnections(tool.Activated)) do
+            if conn.Connected then conn:Disable() table.insert(disabled, conn) end
+        end
+    end)
+    pcall(function()
+        for _, conn in pairs(getconnections(tool.Equipped)) do
+            if conn.Connected then conn:Disable() table.insert(disabled, conn) end
+        end
+    end)
+    pcall(function() hum:EquipTool(tool) end)
+    task.wait(0.3)
+    -- Herstel connections
+    for _, conn in pairs(disabled) do
+        pcall(function() conn:Enable() end)
+    end
+end
+
+function M.safeUnequip()
+    local ch = Player.Character if not ch then return end
+    local hum = ch:FindFirstChild("Humanoid") if not hum then return end
+    local eq = ch:FindFirstChildWhichIsA("Tool")
+    if not eq then return end
+    local disabled = {}
+    pcall(function()
+        for _, conn in pairs(getconnections(eq.Unequipped)) do
+            if conn.Connected then conn:Disable() table.insert(disabled, conn) end
+        end
+    end)
+    pcall(function() hum:UnequipTools() end)
+    task.wait(0.1)
+    for _, conn in pairs(disabled) do
+        pcall(function() conn:Enable() end)
+    end
 end
 
 -- ========== MUUR DETECTIE ==========
@@ -413,7 +488,7 @@ function M.waitForRespawn()
     return not M.isDead()
 end
 
--- ========== FORCE GRAB - SNEL ==========
+-- ========== FORCE GRAB ==========
 function M.forceGrabPrompt(target)
     if not target then return end
     local prompts = {}
@@ -546,6 +621,7 @@ function M.toolMatchesRarity(tool, targetRarity, targetMutation)
     return true
 end
 
+-- Alleen lezen, nooit aanraken/locken
 function M.findTargetToolInBackpack()
     local bp = Player:FindFirstChild("Backpack")
     if bp then
@@ -624,7 +700,7 @@ function M.clearSlot(s)
     if not M.baseGUID or not M.PlotAction then return end
     pcall(function() M.PlotAction:InvokeServer("Pick Up Brainrot", M.baseGUID, tostring(s)) end)
     task.wait(0.5)
-    pcall(function() Player.Character.Humanoid:UnequipTools() end)
+    M.safeUnequip()
     task.wait(0.3)
 end
 
@@ -640,11 +716,14 @@ function M.tweenToSlot(slotNumber)
     if not myBase then return false end
     local sm = myBase:FindFirstChild("slot " .. slotNumber .. " brainrot")
     if not sm then return false end
+    -- Alleen Root gebruiken, nooit GetDescendants (voorkomt lock triggers)
     local root = sm:FindFirstChild("Root")
-    if root then return M.tweenTo(root.CFrame * CFrame.new(0, 3, 0)) end
-    for _, part in pairs(sm:GetDescendants()) do
-        if part:IsA("BasePart") then return M.tweenTo(part.CFrame * CFrame.new(0, 3, 0)) end
+    if root and root:IsA("BasePart") then
+        return M.tweenTo(root.CFrame * CFrame.new(0, 3, 0))
     end
+    -- Fallback via pivot
+    local ok, pos = pcall(function() return sm:GetPivot() end)
+    if ok and pos then return M.tweenTo(pos * CFrame.new(0, 3, 0)) end
     return false
 end
 
@@ -718,7 +797,7 @@ function M.startFarming()
                                                 task.wait(0.3) M.Status.farmCount += 1 break
                                             else break end
                                         end
-                                        pcall(function() hum:UnequipTools() end) task.wait(0.1)
+                                        M.safeUnequip() task.wait(0.1)
                                         M.Status.farm = "Terug via muur..."
                                         M.safeReturnToBase()
                                     end
@@ -729,10 +808,11 @@ function M.startFarming()
                     task.wait(1) return
                 end
 
+                -- COLLECT PLACE & MAX
                 if not M.isSlotEmpty(ws) then
                     M.Status.farm = "Slot leegmaken..."
                     M.pickUpBrainrot(ws) task.wait(0.5)
-                    pcall(function() hum:UnequipTools() end) task.wait(0.3)
+                    M.safeUnequip() task.wait(0.3)
                 end
 
                 local tool = M.findTargetToolInBackpack()
@@ -774,7 +854,7 @@ function M.startFarming()
                                                 task.wait(0.3) M.Status.farmCount += 1 break
                                             else found = false break end
                                         end
-                                        pcall(function() hum:UnequipTools() end) task.wait(0.1)
+                                        M.safeUnequip() task.wait(0.1)
                                         M.Status.farm = "Terug via muur..."
                                         M.safeReturnToBase()
                                         break
@@ -799,14 +879,12 @@ function M.startFarming()
                 local bName = tool:GetAttribute("BrainrotName") or "Brainrot"
                 M.Status.farm = "Naar slot " .. ws
                 M.tweenToSlot(ws) task.wait(0.3)
-                local eq = ch:FindFirstChildWhichIsA("Tool")
-                if eq and eq ~= tool then hum:UnequipTools() task.wait(0.2) end
-                hum:EquipTool(tool) task.wait(0.5)
+                M.safeEquip(tool) task.wait(0.5)
                 M.Status.farm = "Plaatsen " .. bName
                 M.placeBrainrot(ws) task.wait(0.8)
                 if M.isSlotEmpty(ws) then
                     M.Status.farm = "Plaatsen mislukt..."
-                    pcall(function() hum:UnequipTools() end) task.wait(1) return
+                    M.safeUnequip() task.wait(1) return
                 end
                 M.Status.farm = "Upgraden " .. bName .. "..."
                 local mb = workspace:FindFirstChild("Bases") and workspace.Bases:FindFirstChild(M.baseGUID)
@@ -825,10 +903,10 @@ function M.startFarming()
                 M.Status.farm = bName .. " KLAAR!"
                 task.wait(0.3)
                 M.pickUpBrainrot(ws) task.wait(0.8)
-                pcall(function() hum:UnequipTools() end) task.wait(0.3)
+                M.safeUnequip() task.wait(0.3)
                 if not M.isSlotEmpty(ws) then
                     M.pickUpBrainrot(ws) task.wait(0.5)
-                    pcall(function() hum:UnequipTools() end) task.wait(0.3)
+                    M.safeUnequip() task.wait(0.3)
                 end
                 M.Status.farm = "Volgende..."
             end)
@@ -882,13 +960,10 @@ function M.findLuckyBlockRoot(block)
     return nil
 end
 
--- ========== LUCKY BLOCK GRAB - ULTRAFAST ==========
--- Pak het block zo snel mogelijk en ga DIRECT terug
+-- ULTRAFAST grab - alles tegelijk, geen waits
 function M.grabLuckyBlock(block, rootPart)
     if not block or not rootPart then return end
     local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
-
-    -- Alle prompts tegelijk firen zonder wachten
     for _, d in pairs(block:GetDescendants()) do
         if d:IsA("ProximityPrompt") then
             pcall(function() d.MaxActivationDistance = 99999 d.HoldDuration = 0 end)
@@ -906,8 +981,6 @@ function M.grabLuckyBlock(block, rootPart)
             end
         end
     end
-
-    -- Touch interest op alles tegelijk
     if hrp then
         local function touchAll(obj)
             if obj:IsA("BasePart") then
@@ -962,19 +1035,17 @@ function M.startLuckyBlockFarm()
                     if M.luckyBlockRarityMatches(block.Name) and M.luckyBlockMutationMatches(block) then
                         local rootPart = M.findLuckyBlockRoot(block)
                         if not rootPart then continue end
-
                         foundBlock = true
                         local rarityName = M.luckyBlockGetRarityFromName(block.Name)
 
-                        -- Ga naar block via muur corridor
                         M.Status.luckyBlock = "Ga naar " .. rarityName .. "..."
                         M.safePathTo(rootPart.CFrame * CFrame.new(0, 3, 0))
 
-                        -- ULTRAFAST grab - geen wachttijd
+                        -- ULTRAFAST grab
                         M.Status.luckyBlock = "Openen " .. rarityName .. "..."
                         M.grabLuckyBlock(block, rootPart)
 
-                        -- Wacht MAXIMAAL 0.2s of block verdwijnt
+                        -- Max 0.2s wachten of block verdwijnt
                         local t = tick()
                         while tick() - t < 0.2 do
                             if not block.Parent or not rootPart.Parent then break end
@@ -988,10 +1059,8 @@ function M.startLuckyBlockFarm()
                             M.Status.luckyBlock = rarityName .. " geprobeerd..."
                         end
 
-                        -- Unequip en METEEN terug
-                        pcall(function() hum:UnequipTools() end)
-
-                        -- DIRECT terug via muur, geen extra wachttijd
+                        -- DIRECT terug, geen extra wachttijd
+                        M.safeUnequip()
                         M.Status.luckyBlock = "Terug via muur..."
                         M.safeReturnToBase()
                         break
@@ -1049,7 +1118,7 @@ function M.startFactoryLoop()
                 local ws = tonumber(M.S.FactorySlot) or 5
                 if not M.isSlotEmpty(ws) then
                     M.pickUpBrainrot(ws) task.wait(0.5)
-                    pcall(function() Player.Character.Humanoid:UnequipTools() end) task.wait(0.3)
+                    M.safeUnequip() task.wait(0.3)
                 end
                 local bp = Player:FindFirstChild("Backpack") if not bp then return end
                 local tool = nil
@@ -1059,10 +1128,9 @@ function M.startFactoryLoop()
                 if not tool then stopR = "Alle " .. M.S.FactoryRarity .. "s klaar!" M.S.FactoryEnabled = false return end
                 local bName = tool:GetAttribute("BrainrotName") or "Item"
                 M.Status.factory = "Equippen " .. bName
-                local hum = Player.Character and Player.Character:FindFirstChild("Humanoid")
-                if hum then hum:EquipTool(tool) task.wait(0.5) end
+                M.safeEquip(tool) task.wait(0.5)
                 M.placeBrainrot(ws) task.wait(0.8)
-                if M.isSlotEmpty(ws) then pcall(function() hum:UnequipTools() end) task.wait(1) return end
+                if M.isSlotEmpty(ws) then M.safeUnequip() task.wait(1) return end
                 M.Status.factory = "Maxen " .. bName
                 local mb = workspace:FindFirstChild("Bases") and workspace.Bases:FindFirstChild(M.baseGUID)
                 local sm = mb and mb:FindFirstChild("slot " .. ws .. " brainrot")
@@ -1077,7 +1145,7 @@ function M.startFactoryLoop()
                     end
                 end
                 task.wait(0.5) M.pickUpBrainrot(ws) task.wait(0.8) M.Status.factoryCount += 1
-                pcall(function() Player.Character.Humanoid:UnequipTools() end) task.wait(0.3)
+                M.safeUnequip() task.wait(0.3)
             end)
             if not ok then task.wait(1) end
             if M.S.FactoryEnabled then task.wait(0.5) end
@@ -1265,15 +1333,14 @@ function M.getHeartCount()
     return found
 end
 
--- ========== VALENTINE SUBMIT - ZONDER BEWEGEN ==========
+-- Submit zonder te bewegen - 3 methodes
 function M.submitHearts()
     local submitted = false
-
-    -- Methode 1: Zoek remotes in ReplicatedStorage
+    -- Methode 1: Zoek remotes
     pcall(function()
         local rs = game:GetService("ReplicatedStorage")
         local function searchRemotes(parent, depth)
-            if depth > 5 then return end
+            if depth > 6 then return end
             for _, v in pairs(parent:GetChildren()) do
                 local n = v.Name:lower()
                 if n:find("valentine") or n:find("candy") or n:find("submit") or
@@ -1289,15 +1356,12 @@ function M.submitHearts()
                         submitted = true
                     end
                 end
-                if v:IsA("Folder") or v:IsA("Configuration") or v:IsA("Instance") then
-                    searchRemotes(v, depth + 1)
-                end
+                searchRemotes(v, depth + 1)
             end
         end
         searchRemotes(rs, 0)
     end)
-
-    -- Methode 2: ProximityPrompt firen zonder te bewegen (MaxActivationDistance = oneindig)
+    -- Methode 2: ProximityPrompt zonder te bewegen
     pcall(function()
         local st = workspace:FindFirstChild("ValentinesMap")
         if not st then return end
@@ -1315,8 +1379,7 @@ function M.submitHearts()
             end
         end
     end)
-
-    -- Methode 3: TouchInterest zonder te bewegen
+    -- Methode 3: TouchInterest
     pcall(function()
         local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
         if not hrp then return end
@@ -1333,7 +1396,6 @@ function M.submitHearts()
             end
         end
     end)
-
     return submitted
 end
 
@@ -1371,7 +1433,6 @@ function M.startValentine()
                 M.Status.valentine = "Inleveren (zonder bewegen)..."
                 M._valentineCollecting = false
                 task.wait(0.3)
-                -- Probeer meerdere keren zonder te bewegen
                 local prevH = h
                 for attempt = 1, 5 do
                     M.submitHearts()
@@ -1382,9 +1443,7 @@ function M.startValentine()
                         M.Status.valentine = "Ingeleverd! (#" .. M.Status.valentineCount .. ")"
                         break
                     end
-                    if attempt == 5 then
-                        M.Status.valentine = "Submit mislukt, opnieuw..."
-                    end
+                    if attempt == 5 then M.Status.valentine = "Submit mislukt..." end
                 end
                 task.wait(0.5)
                 M._valentineCollecting = true
@@ -1587,7 +1646,7 @@ function M.mapBuildWalls(map,sx,ex)
         local t=Instance.new("TextLabel") t.Size=UDim2.new(1,0,0.5,0) t.Position=UDim2.new(0,0,0.1,0)
         t.BackgroundTransparency=1 t.Text="MzD Hub" t.TextColor3=MF.GLW t.TextScaled=true t.Font=Enum.Font.GothamBold t.Parent=sg
         local s2=Instance.new("TextLabel") s2.Size=UDim2.new(0.6,0,0.2,0) s2.Position=UDim2.new(0.2,0,0.6,0)
-        s2.BackgroundTransparency=1 s2.Text="v10.0" s2.TextColor3=Color3.fromRGB(200,200,200) s2.TextScaled=true s2.Font=Enum.Font.Gotham s2.Parent=sg
+        s2.BackgroundTransparency=1 s2.Text="v10.1" s2.TextColor3=Color3.fromRGB(200,200,200) s2.TextScaled=true s2.Font=Enum.Font.Gotham s2.Parent=sg
     end
     local segs={} local sl=2000 local p=sx
     while p<ex do local l=math.min(sl,ex-p) table.insert(segs,{s=p,l=l}) p=p+l end
@@ -1664,7 +1723,7 @@ function M.stopMapFixer()
     M.S.MapFixerEnabled=false if M.mapFixerThread then pcall(task.cancel,M.mapFixerThread) M.mapFixerThread=nil end M.Status.mapFixer="Uit"
 end
 
-print("[MzD Hub] Core v10.0 Geladen")
+print("[MzD Hub] Core v10.1 Geladen")
 
 -- ============================================
 -- GUI
@@ -1692,7 +1751,7 @@ local SPD={"200","400","600","800","1000","1500","2000","INSTANT"}
 local SPM={["200"]=200,["400"]=400,["600"]=600,["800"]=800,["1000"]=1000,["1500"]=1500,["2000"]=2000,["INSTANT"]=9999}
 local CSPD={"100","200","300","400","500","600","800","1000"}
 
-local W=Fluent:CreateWindow({Title="MzD Hub",SubTitle="v10.0 - Escape Tsunami From Brainrot",TabWidth=160,Size=UDim2.fromOffset(600,500),Acrylic=true,Theme="Dark",MinimizeKey=Enum.KeyCode.RightControl})
+local W=Fluent:CreateWindow({Title="MzD Hub",SubTitle="v10.1 - Escape Tsunami From Brainrot",TabWidth=160,Size=UDim2.fromOffset(600,500),Acrylic=true,Theme="Dark",MinimizeKey=Enum.KeyCode.RightControl})
 
 -- FARM TAB
 local FT=W:AddTab({Title="Farm",Icon="swords"})
@@ -1708,7 +1767,7 @@ RDD:OnChanged(function(v)
 end)
 BDD=FT:AddDropdown("FarmBrainrots",{Title="Specifieke Brainrots",Description="Leeg = alle van rarity",Values=M.getBrainrotNamesMulti(M.S.TargetRarity),Default={},Multi=true})
 BDD:OnChanged(function(v) local s={} for n,on in pairs(v) do if on then table.insert(s,n) end end M.S.SelectedBrainrots=s end)
-FT:AddDropdown("FarmMutation",{Title="Mutatie Filter",Description="Genegeerd voor hoge rarities",Values=MUT,Default="None",Multi=false}):OnChanged(function(v) M.S.TargetMutation=v end)
+FT:AddDropdown("FarmMutation",{Title="Mutatie Filter",Values=MUT,Default="None",Multi=false}):OnChanged(function(v) M.S.TargetMutation=v end)
 FT:AddDropdown("FarmMode",{Title="Farm Mode",Values=FM,Default=M.S.FarmMode,Multi=false}):OnChanged(function(v) M.S.FarmMode=v end)
 FT:AddDropdown("FarmSlot",{Title="Werk Slot",Values=SL,Default=M.S.FarmSlot,Multi=false}):OnChanged(function(v) M.S.FarmSlot=v end)
 FT:AddSlider("FarmMaxLevel",{Title="Max Level",Default=M.S.MaxLevel,Min=1,Max=500,Rounding=0}):OnChanged(function(v) M.S.MaxLevel=math.floor(v) end)
@@ -1719,7 +1778,6 @@ FTG:OnChanged(function(v)
     if v then M.findBase() M.startFarming() Fluent:Notify({Title="Farm",Content="Gestart! God+Noclip aan ✓",Duration=3})
     else M.stopFarming() Fluent:Notify({Title="Farm",Content="Gestopt. #"..M.Status.farmCount,Duration=3}) end
 end)
-
 FT:AddParagraph({Title="🎲 Lucky Block Farm",Content=""})
 FT:AddDropdown("LBRarity",{Title="Rarity",Values=LBR,Default={"Common"},Multi=true}):OnChanged(function(v)
     local s={} for n,on in pairs(v) do if on then table.insert(s,n) end end
@@ -1731,7 +1789,7 @@ FT:AddDropdown("LBMutation",{Title="Mutatie",Values=MUT,Default="Any",Multi=fals
 local LBSP=FT:AddParagraph({Title="Lucky Block Status",Content="Idle"})
 local LBTG=FT:AddToggle("LBToggle",{Title="🎲 Auto Lucky Block Farm",Default=false})
 LBTG:OnChanged(function(v)
-    if v then M.findBase() M.startLuckyBlockFarm() Fluent:Notify({Title="Lucky Block",Content="Gestart! Ultrafast grab ✓",Duration=3})
+    if v then M.findBase() M.startLuckyBlockFarm() Fluent:Notify({Title="Lucky Block",Content="Gestart!",Duration=3})
     else M.stopLuckyBlockFarm() Fluent:Notify({Title="Lucky Block",Content="Gestopt. #"..M.Status.luckyBlockCount,Duration=3}) end
 end)
 
@@ -1750,7 +1808,7 @@ end)
 
 -- EVENTS TAB
 local ET=W:AddTab({Title="Events",Icon="party-popper"})
-ET:AddParagraph({Title="💝 Valentine",Content="Inleveren gaat zonder te bewegen naar het station!"})
+ET:AddParagraph({Title="💝 Valentine",Content="Inleveren zonder te bewegen naar station ✓"})
 local VSP=ET:AddParagraph({Title="Status",Content="Idle"})
 local VTG=ET:AddToggle("ValentineToggle",{Title="💝 Valentine Farm",Default=false})
 VTG:OnChanged(function(v) if v then M.startValentine() else M.stopValentine() end end)
@@ -1802,7 +1860,7 @@ end})
 CT:AddButton({Title="🏠 Zoek Base",Callback=function()
     M.findBase() Fluent:Notify({Title="Base",Content=M.baseGUID and("Gevonden: "..M.baseGUID) or "Niet gevonden!",Duration=3})
 end})
-CT:AddButton({Title="📍 Sla Home Op",Description="Huidige positie = terugkeerpunt",Callback=function()
+CT:AddButton({Title="📍 Sla Home Op",Callback=function()
     M.setHomePosition() local hp=M.homePosition and M.homePosition.Position
     if hp then Fluent:Notify({Title="Home",Content=string.format("X:%.1f Y:%.1f Z:%.1f",hp.X,hp.Y,hp.Z),Duration=5})
     else Fluent:Notify({Title="Home",Content="Mislukt!",Duration=3}) end
@@ -1894,10 +1952,10 @@ end)
 -- INIT
 task.spawn(function()
     task.wait(1) M.findBase() task.wait(0.5) M.detectWallZ()
-    if M.baseGUID then Fluent:Notify({Title="MzD Hub v10.0",Content="Base: "..M.baseGUID.."\nCoridor Z: "..string.format("%.1f",M.getCorridorZ()),Duration=5})
-    else Fluent:Notify({Title="MzD Hub v10.0",Content="Geladen! Klik 'Zoek Base' in Config.",Duration=5}) end
+    if M.baseGUID then Fluent:Notify({Title="MzD Hub v10.1",Content="Base: "..M.baseGUID.."\nCoridor Z: "..string.format("%.1f",M.getCorridorZ()),Duration=5})
+    else Fluent:Notify({Title="MzD Hub v10.1",Content="Geladen! Klik 'Zoek Base' in Config.",Duration=5}) end
 end)
 
 W:SelectTab(1)
-Fluent:Notify({Title="MzD Hub v10.0",Content="Geladen ✦ RightCtrl = minimaliseer",Duration=4})
-print("[MzD Hub] v10.0 VOLLEDIG GELADEN ✦")
+Fluent:Notify({Title="MzD Hub v10.1",Content="Geladen ✦ RightCtrl = minimaliseer",Duration=4})
+print("[MzD Hub] v10.1 VOLLEDIG GELADEN ✦")
