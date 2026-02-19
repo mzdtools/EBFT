@@ -1,5 +1,5 @@
 -- ============================================
--- MzD Hub v9.8 - VOLLEDIG
+-- MzD Hub v9.9 - VOLLEDIG
 -- ============================================
 getgenv().MzD = {}
 local M = getgenv().MzD
@@ -362,19 +362,14 @@ function M.safeReturnToBase()
     M.detectWallZ()
     local SAFE_Z = M.getCorridorZ()
     local SAFE_Y = homePos.Y + 8
-    -- Omhoog
     M.fastTween(CFrame.new(curPos.X, SAFE_Y, curPos.Z))
     task.wait(0.05)
-    -- Naar corridor langs muur
     M.corridorTween(CFrame.new(curPos.X, SAFE_Y, SAFE_Z))
     task.wait(0.05)
-    -- Slide X naar home
     M.corridorTween(CFrame.new(homePos.X, SAFE_Y, SAFE_Z))
     task.wait(0.05)
-    -- Naar home Z
     M.corridorTween(CFrame.new(homePos.X, SAFE_Y, homePos.Z))
     task.wait(0.05)
-    -- Naar home
     M.tweenTo(M.getHomePosition())
     task.wait(0.05)
 end
@@ -430,9 +425,9 @@ function M.forceGrabPrompt(target)
     end
     for _, p in pairs(prompts) do
         pcall(function() p.MaxActivationDistance = 99999 p.HoldDuration = 0 end)
-        task.wait(0.05)
+        task.wait(0.03)
         pcall(function() fireproximityprompt(p) end)
-        task.wait(0.1)
+        task.wait(0.05)
         pcall(function() fireproximityprompt(p) end)
     end
     local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
@@ -441,7 +436,7 @@ function M.forceGrabPrompt(target)
         if parent:IsA("ProximityPrompt") then parent = parent.Parent end
         if parent and parent:IsA("BasePart") then
             pcall(function() firetouchinterest(hrp, parent, 0) end)
-            task.wait(0.05)
+            task.wait(0.03)
             pcall(function() firetouchinterest(hrp, parent, 1) end)
         end
         local searchRoot = parent
@@ -458,7 +453,7 @@ function M.forceGrabPrompt(target)
             end
         end
     end
-    task.wait(0.1)
+    task.wait(0.05)
 end
 
 -- ========== RARITY ==========
@@ -723,10 +718,10 @@ function M.startFarming()
                                             if root and root.Parent then
                                                 M.Status.farm = "Pakken " .. folder.Name .. "..."
                                                 M.forceGrabPrompt(root) M.forceGrabPrompt(b)
-                                                task.wait(0.5) M.Status.farmCount += 1 break
+                                                task.wait(0.3) M.Status.farmCount += 1 break
                                             else break end
                                         end
-                                        pcall(function() hum:UnequipTools() end) task.wait(0.2)
+                                        pcall(function() hum:UnequipTools() end) task.wait(0.1)
                                         M.Status.farm = "Terug via muur..."
                                         M.safeReturnToBase()
                                     end
@@ -780,10 +775,10 @@ function M.startFarming()
                                             end
                                             if root and root.Parent then
                                                 M.forceGrabPrompt(root) M.forceGrabPrompt(b)
-                                                task.wait(0.8) M.Status.farmCount += 1 break
+                                                task.wait(0.3) M.Status.farmCount += 1 break
                                             else found = false break end
                                         end
-                                        pcall(function() hum:UnequipTools() end) task.wait(0.2)
+                                        pcall(function() hum:UnequipTools() end) task.wait(0.1)
                                         M.Status.farm = "Terug via muur..."
                                         M.safeReturnToBase()
                                         break
@@ -935,41 +930,28 @@ function M.startLuckyBlockFarm()
                         M.Status.luckyBlock = "Ga naar " .. rarityName .. "..."
                         M.safePathTo(rootPart.CFrame * CFrame.new(0, 3, 0))
 
-                        -- Probeer te pakken
-                        for attempt = 1, 5 do
-                            if not M.S.LuckyBlockEnabled then break end
-                            if M.isDead() then
-                                M.Status.luckyBlock = "Dood! Poging " .. attempt
-                                M.waitForRespawn() task.wait(1)
-                                M.setHomePosition() M.enableGod()
-                                if not M.S.LuckyBlockEnabled then break end
-                                if rootPart and rootPart.Parent then
-                                    M.safePathTo(rootPart.CFrame * CFrame.new(0, 3, 0))
-                                else break end
-                            end
-                            if rootPart and rootPart.Parent then
-                                M.Status.luckyBlock = "Openen " .. rarityName .. "..."
-                                M.forceGrabPrompt(block) task.wait(0.4)
-                                M.forceGrabPrompt(rootPart) task.wait(0.4)
-                                if not block.Parent or not rootPart.Parent then
-                                    M.Status.luckyBlockCount += 1
-                                    M.Status.luckyBlock = rarityName .. " geopend! (#" .. M.Status.luckyBlockCount .. ")"
-                                else
-                                    M.Status.luckyBlock = rarityName .. " geprobeerd..."
-                                end
-                                break -- altijd stoppen na poging
-                            else break end
+                        -- Pak het block - direct en snel terug
+                        M.Status.luckyBlock = "Openen " .. rarityName .. "..."
+                        M.forceGrabPrompt(block)
+                        M.forceGrabPrompt(rootPart)
+                        -- Wacht kort of block verdwijnt
+                        local waited = 0
+                        while waited < 0.5 and block.Parent and rootPart.Parent do
+                            task.wait(0.05)
+                            waited += 0.05
+                        end
+                        if not block.Parent or not rootPart.Parent then
+                            M.Status.luckyBlockCount += 1
+                            M.Status.luckyBlock = rarityName .. " geopend! (#" .. M.Status.luckyBlockCount .. ")"
+                        else
+                            M.Status.luckyBlock = rarityName .. " geprobeerd..."
                         end
 
-                        -- Unequip
-                        pcall(function() hum:UnequipTools() end) task.wait(0.2)
-
-                        -- ALTIJD terug via muur
+                        -- Unequip en DIRECT terug via muur
+                        pcall(function() hum:UnequipTools() end)
+                        task.wait(0.1)
                         M.Status.luckyBlock = "Terug via muur..."
                         M.safeReturnToBase()
-                        task.wait(0.2)
-
-                        -- Stop met zoeken, nieuwe scan volgende ronde
                         break
                     end
                 end
@@ -980,7 +962,7 @@ function M.startLuckyBlockFarm()
                 end
             end)
             if not ok then warn("[MzD LB] " .. tostring(err)) task.wait(1) end
-            task.wait(0.3)
+            task.wait(0.2)
         end
         M.disableNoclip() M.disableGod()
         M.Status.luckyBlock = "Idle" M.luckyBlockThread = nil
@@ -1489,7 +1471,7 @@ function M.mapBuildWalls(map,sx,ex)
         local t=Instance.new("TextLabel") t.Size=UDim2.new(1,0,0.5,0) t.Position=UDim2.new(0,0,0.1,0)
         t.BackgroundTransparency=1 t.Text="MzD Hub" t.TextColor3=MF.GLW t.TextScaled=true t.Font=Enum.Font.GothamBold t.Parent=sg
         local s2=Instance.new("TextLabel") s2.Size=UDim2.new(0.6,0,0.2,0) s2.Position=UDim2.new(0.2,0,0.6,0)
-        s2.BackgroundTransparency=1 s2.Text="v9.8" s2.TextColor3=Color3.fromRGB(200,200,200) s2.TextScaled=true s2.Font=Enum.Font.Gotham s2.Parent=sg
+        s2.BackgroundTransparency=1 s2.Text="v9.9" s2.TextColor3=Color3.fromRGB(200,200,200) s2.TextScaled=true s2.Font=Enum.Font.Gotham s2.Parent=sg
     end
     local segs={} local sl=2000 local p=sx
     while p<ex do local l=math.min(sl,ex-p) table.insert(segs,{s=p,l=l}) p=p+l end
@@ -1566,7 +1548,7 @@ function M.stopMapFixer()
     M.S.MapFixerEnabled=false if M.mapFixerThread then pcall(task.cancel,M.mapFixerThread) M.mapFixerThread=nil end M.Status.mapFixer="Uit"
 end
 
-print("[MzD Hub] Core v9.8 Geladen")
+print("[MzD Hub] Core v9.9 Geladen")
 
 -- ============================================
 -- GUI
@@ -1594,7 +1576,7 @@ local SPD={"200","400","600","800","1000","1500","2000","INSTANT"}
 local SPM={["200"]=200,["400"]=400,["600"]=600,["800"]=800,["1000"]=1000,["1500"]=1500,["2000"]=2000,["INSTANT"]=9999}
 local CSPD={"100","200","300","400","500","600","800","1000"}
 
-local W=Fluent:CreateWindow({Title="MzD Hub",SubTitle="v9.8 - Escape Tsunami From Brainrot",TabWidth=160,Size=UDim2.fromOffset(600,500),Acrylic=true,Theme="Dark",MinimizeKey=Enum.KeyCode.RightControl})
+local W=Fluent:CreateWindow({Title="MzD Hub",SubTitle="v9.9 - Escape Tsunami From Brainrot",TabWidth=160,Size=UDim2.fromOffset(600,500),Acrylic=true,Theme="Dark",MinimizeKey=Enum.KeyCode.RightControl})
 
 -- FARM TAB
 local FT=W:AddTab({Title="Farm",Icon="swords"})
@@ -1731,7 +1713,7 @@ CT:AddButton({Title="🔍 Scan Lucky Blocks",Callback=function()
         if cnt<=12 then info=info..r if mt~="None" and mt~="" then info=info.." ["..mt.."]" end info=info.."\n" end
     end end
     if cnt==0 then Fluent:Notify({Title="Lucky Blocks",Content="Geen actieve blocks!",Duration=5})
-    else if cnt>12 then info=info.."... +"..( cnt-12).." meer" end Fluent:Notify({Title="Lucky Blocks ("..cnt..")",Content=info,Duration=8}) end
+    else if cnt>12 then info=info.."... +"..(cnt-12).." meer" end Fluent:Notify({Title="Lucky Blocks ("..cnt..")",Content=info,Duration=8}) end
 end})
 CT:AddButton({Title="🔍 Debug Brainrots",Callback=function()
     if not M.ActiveBrainrots then M.ActiveBrainrots=workspace:FindFirstChild("ActiveBrainrots") end
@@ -1796,10 +1778,10 @@ end)
 -- INIT
 task.spawn(function()
     task.wait(1) M.findBase() task.wait(0.5) M.detectWallZ()
-    if M.baseGUID then Fluent:Notify({Title="MzD Hub v9.8",Content="Base: "..M.baseGUID.."\nCoridor Z: "..string.format("%.1f",M.getCorridorZ()),Duration=5})
-    else Fluent:Notify({Title="MzD Hub v9.8",Content="Geladen! Klik 'Zoek Base' in Config.",Duration=5}) end
+    if M.baseGUID then Fluent:Notify({Title="MzD Hub v9.9",Content="Base: "..M.baseGUID.."\nCoridor Z: "..string.format("%.1f",M.getCorridorZ()),Duration=5})
+    else Fluent:Notify({Title="MzD Hub v9.9",Content="Geladen! Klik 'Zoek Base' in Config.",Duration=5}) end
 end)
 
 W:SelectTab(1)
-Fluent:Notify({Title="MzD Hub v9.8",Content="Geladen ✦ RightCtrl = minimaliseer",Duration=4})
-print("[MzD Hub] v9.8 VOLLEDIG GELADEN ✦")
+Fluent:Notify({Title="MzD Hub v9.9",Content="Geladen ✦ RightCtrl = minimaliseer",Duration=4})
+print("[MzD Hub] v9.9 VOLLEDIG GELADEN ✦")
