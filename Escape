@@ -1,5 +1,5 @@
 -- ============================================
--- MzD Hub v9.9 - VOLLEDIG
+-- MzD Hub v10.0 - VOLLEDIG
 -- ============================================
 getgenv().MzD = {}
 local M = getgenv().MzD
@@ -413,6 +413,7 @@ function M.waitForRespawn()
     return not M.isDead()
 end
 
+-- ========== FORCE GRAB - SNEL ==========
 function M.forceGrabPrompt(target)
     if not target then return end
     local prompts = {}
@@ -425,9 +426,8 @@ function M.forceGrabPrompt(target)
     end
     for _, p in pairs(prompts) do
         pcall(function() p.MaxActivationDistance = 99999 p.HoldDuration = 0 end)
-        task.wait(0.03)
         pcall(function() fireproximityprompt(p) end)
-        task.wait(0.05)
+        task.wait(0.02)
         pcall(function() fireproximityprompt(p) end)
     end
     local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
@@ -436,7 +436,6 @@ function M.forceGrabPrompt(target)
         if parent:IsA("ProximityPrompt") then parent = parent.Parent end
         if parent and parent:IsA("BasePart") then
             pcall(function() firetouchinterest(hrp, parent, 0) end)
-            task.wait(0.03)
             pcall(function() firetouchinterest(hrp, parent, 1) end)
         end
         local searchRoot = parent
@@ -447,13 +446,12 @@ function M.forceGrabPrompt(target)
             for _, d in pairs(searchRoot:GetDescendants()) do
                 if d:IsA("BasePart") then
                     pcall(function() firetouchinterest(hrp, d, 0) end)
-                    task.wait(0.01)
                     pcall(function() firetouchinterest(hrp, d, 1) end)
                 end
             end
         end
     end
-    task.wait(0.05)
+    task.wait(0.02)
 end
 
 -- ========== RARITY ==========
@@ -694,7 +692,6 @@ function M.startFarming()
                 if not M.baseGUID then M.Status.farm = "Geen base!" task.wait(2) return end
                 local ws = tonumber(M.S.FarmSlot) or 5
 
-                -- COLLECT ONLY
                 if M.S.FarmMode == "Collect" then
                     M.Status.farm = "Zoeken..."
                     if not M.ActiveBrainrots then M.ActiveBrainrots = workspace:FindFirstChild("ActiveBrainrots") end
@@ -732,7 +729,6 @@ function M.startFarming()
                     task.wait(1) return
                 end
 
-                -- COLLECT PLACE & MAX
                 if not M.isSlotEmpty(ws) then
                     M.Status.farm = "Slot leegmaken..."
                     M.pickUpBrainrot(ws) task.wait(0.5)
@@ -886,6 +882,50 @@ function M.findLuckyBlockRoot(block)
     return nil
 end
 
+-- ========== LUCKY BLOCK GRAB - ULTRAFAST ==========
+-- Pak het block zo snel mogelijk en ga DIRECT terug
+function M.grabLuckyBlock(block, rootPart)
+    if not block or not rootPart then return end
+    local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+
+    -- Alle prompts tegelijk firen zonder wachten
+    for _, d in pairs(block:GetDescendants()) do
+        if d:IsA("ProximityPrompt") then
+            pcall(function() d.MaxActivationDistance = 99999 d.HoldDuration = 0 end)
+            pcall(function() fireproximityprompt(d) end)
+        end
+    end
+    if rootPart:IsA("ProximityPrompt") then
+        pcall(function() rootPart.MaxActivationDistance = 99999 rootPart.HoldDuration = 0 end)
+        pcall(function() fireproximityprompt(rootPart) end)
+    else
+        for _, d in pairs(rootPart:GetDescendants()) do
+            if d:IsA("ProximityPrompt") then
+                pcall(function() d.MaxActivationDistance = 99999 d.HoldDuration = 0 end)
+                pcall(function() fireproximityprompt(d) end)
+            end
+        end
+    end
+
+    -- Touch interest op alles tegelijk
+    if hrp then
+        local function touchAll(obj)
+            if obj:IsA("BasePart") then
+                pcall(function() firetouchinterest(hrp, obj, 0) end)
+                pcall(function() firetouchinterest(hrp, obj, 1) end)
+            end
+            for _, d in pairs(obj:GetDescendants()) do
+                if d:IsA("BasePart") then
+                    pcall(function() firetouchinterest(hrp, d, 0) end)
+                    pcall(function() firetouchinterest(hrp, d, 1) end)
+                end
+            end
+        end
+        touchAll(block)
+        if rootPart ~= block then touchAll(rootPart) end
+    end
+end
+
 function M.startLuckyBlockFarm()
     if M.luckyBlockThread then return end
     M.S.LuckyBlockEnabled = true
@@ -930,16 +970,17 @@ function M.startLuckyBlockFarm()
                         M.Status.luckyBlock = "Ga naar " .. rarityName .. "..."
                         M.safePathTo(rootPart.CFrame * CFrame.new(0, 3, 0))
 
-                        -- Pak het block - direct en snel terug
+                        -- ULTRAFAST grab - geen wachttijd
                         M.Status.luckyBlock = "Openen " .. rarityName .. "..."
-                        M.forceGrabPrompt(block)
-                        M.forceGrabPrompt(rootPart)
-                        -- Wacht kort of block verdwijnt
-                        local waited = 0
-                        while waited < 0.5 and block.Parent and rootPart.Parent do
-                            task.wait(0.05)
-                            waited += 0.05
+                        M.grabLuckyBlock(block, rootPart)
+
+                        -- Wacht MAXIMAAL 0.2s of block verdwijnt
+                        local t = tick()
+                        while tick() - t < 0.2 do
+                            if not block.Parent or not rootPart.Parent then break end
+                            task.wait(0.02)
                         end
+
                         if not block.Parent or not rootPart.Parent then
                             M.Status.luckyBlockCount += 1
                             M.Status.luckyBlock = rarityName .. " geopend! (#" .. M.Status.luckyBlockCount .. ")"
@@ -947,9 +988,10 @@ function M.startLuckyBlockFarm()
                             M.Status.luckyBlock = rarityName .. " geprobeerd..."
                         end
 
-                        -- Unequip en DIRECT terug via muur
+                        -- Unequip en METEEN terug
                         pcall(function() hum:UnequipTools() end)
-                        task.wait(0.1)
+
+                        -- DIRECT terug via muur, geen extra wachttijd
                         M.Status.luckyBlock = "Terug via muur..."
                         M.safeReturnToBase()
                         break
@@ -962,7 +1004,7 @@ function M.startLuckyBlockFarm()
                 end
             end)
             if not ok then warn("[MzD LB] " .. tostring(err)) task.wait(1) end
-            task.wait(0.2)
+            task.wait(0.1)
         end
         M.disableNoclip() M.disableGod()
         M.Status.luckyBlock = "Idle" M.luckyBlockThread = nil
@@ -1223,19 +1265,76 @@ function M.getHeartCount()
     return found
 end
 
+-- ========== VALENTINE SUBMIT - ZONDER BEWEGEN ==========
 function M.submitHearts()
-    local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart") if not hrp then return false end
-    return pcall(function()
-        local st = workspace:FindFirstChild("ValentinesMap") if not st then return end
-        st = st:FindFirstChild("CandyGramStation") if not st then return end
-        for _, p in pairs(st:GetDescendants()) do if p:IsA("BasePart") then hrp.CFrame = p.CFrame * CFrame.new(0, 5, 0) break end end
-        task.wait(0.5)
-        local main = st:FindFirstChild("Main") if not main then return end
-        local prompts = main:FindFirstChild("Prompts") if not prompts then return end
-        local pr = prompts:FindFirstChild("ProximityPrompt") if not pr then return end
-        pr.MaxActivationDistance = 99999 pr.HoldDuration = 0 task.wait(0.1)
-        fireproximityprompt(pr) task.wait(0.3) fireproximityprompt(pr) task.wait(0.3) fireproximityprompt(pr)
+    local submitted = false
+
+    -- Methode 1: Zoek remotes in ReplicatedStorage
+    pcall(function()
+        local rs = game:GetService("ReplicatedStorage")
+        local function searchRemotes(parent, depth)
+            if depth > 5 then return end
+            for _, v in pairs(parent:GetChildren()) do
+                local n = v.Name:lower()
+                if n:find("valentine") or n:find("candy") or n:find("submit") or
+                   n:find("heart") or n:find("gram") or n:find("gift") then
+                    if v:IsA("RemoteEvent") then
+                        pcall(function() v:FireServer() end)
+                        pcall(function() v:FireServer(Player.Character) end)
+                        pcall(function() v:FireServer(true) end)
+                        submitted = true
+                    elseif v:IsA("RemoteFunction") then
+                        pcall(function() v:InvokeServer() end)
+                        pcall(function() v:InvokeServer(true) end)
+                        submitted = true
+                    end
+                end
+                if v:IsA("Folder") or v:IsA("Configuration") or v:IsA("Instance") then
+                    searchRemotes(v, depth + 1)
+                end
+            end
+        end
+        searchRemotes(rs, 0)
     end)
+
+    -- Methode 2: ProximityPrompt firen zonder te bewegen (MaxActivationDistance = oneindig)
+    pcall(function()
+        local st = workspace:FindFirstChild("ValentinesMap")
+        if not st then return end
+        st = st:FindFirstChild("CandyGramStation")
+        if not st then return end
+        for _, d in pairs(st:GetDescendants()) do
+            if d:IsA("ProximityPrompt") then
+                d.MaxActivationDistance = math.huge
+                d.HoldDuration = 0
+                task.wait(0.02)
+                pcall(function() fireproximityprompt(d) end)
+                task.wait(0.05)
+                pcall(function() fireproximityprompt(d) end)
+                submitted = true
+            end
+        end
+    end)
+
+    -- Methode 3: TouchInterest zonder te bewegen
+    pcall(function()
+        local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+        local st = workspace:FindFirstChild("ValentinesMap")
+        if not st then return end
+        st = st:FindFirstChild("CandyGramStation")
+        if not st then return end
+        for _, d in pairs(st:GetDescendants()) do
+            if d:IsA("BasePart") then
+                pcall(function() firetouchinterest(hrp, d, 0) end)
+                task.wait(0.01)
+                pcall(function() firetouchinterest(hrp, d, 1) end)
+                submitted = true
+            end
+        end
+    end)
+
+    return submitted
 end
 
 function M.startValentine()
@@ -1269,10 +1368,27 @@ function M.startValentine()
         while M.S.ValentineEnabled do
             local h = M.getHeartCount() M.Status.valentine = "Collecten " .. h .. "/100"
             if h >= 100 then
-                M.Status.valentine = "Inleveren..." M._valentineCollecting = false task.wait(0.5)
-                if M.submitHearts() then M.Status.valentineCount += 1 M.Status.valentine = "Ingeleverd! (#" .. M.Status.valentineCount .. ")"
-                else M.Status.valentine = "Inleveren mislukt!" end
-                task.wait(0.5) M._valentineCollecting = true M.refreshValentineCache()
+                M.Status.valentine = "Inleveren (zonder bewegen)..."
+                M._valentineCollecting = false
+                task.wait(0.3)
+                -- Probeer meerdere keren zonder te bewegen
+                local prevH = h
+                for attempt = 1, 5 do
+                    M.submitHearts()
+                    task.wait(0.4)
+                    local newH = M.getHeartCount()
+                    if newH < prevH then
+                        M.Status.valentineCount += 1
+                        M.Status.valentine = "Ingeleverd! (#" .. M.Status.valentineCount .. ")"
+                        break
+                    end
+                    if attempt == 5 then
+                        M.Status.valentine = "Submit mislukt, opnieuw..."
+                    end
+                end
+                task.wait(0.5)
+                M._valentineCollecting = true
+                M.refreshValentineCache()
             end task.wait(0.5)
         end
         M.Status.valentine = "Idle" M.valentineThread = nil
@@ -1471,7 +1587,7 @@ function M.mapBuildWalls(map,sx,ex)
         local t=Instance.new("TextLabel") t.Size=UDim2.new(1,0,0.5,0) t.Position=UDim2.new(0,0,0.1,0)
         t.BackgroundTransparency=1 t.Text="MzD Hub" t.TextColor3=MF.GLW t.TextScaled=true t.Font=Enum.Font.GothamBold t.Parent=sg
         local s2=Instance.new("TextLabel") s2.Size=UDim2.new(0.6,0,0.2,0) s2.Position=UDim2.new(0.2,0,0.6,0)
-        s2.BackgroundTransparency=1 s2.Text="v9.9" s2.TextColor3=Color3.fromRGB(200,200,200) s2.TextScaled=true s2.Font=Enum.Font.Gotham s2.Parent=sg
+        s2.BackgroundTransparency=1 s2.Text="v10.0" s2.TextColor3=Color3.fromRGB(200,200,200) s2.TextScaled=true s2.Font=Enum.Font.Gotham s2.Parent=sg
     end
     local segs={} local sl=2000 local p=sx
     while p<ex do local l=math.min(sl,ex-p) table.insert(segs,{s=p,l=l}) p=p+l end
@@ -1548,7 +1664,7 @@ function M.stopMapFixer()
     M.S.MapFixerEnabled=false if M.mapFixerThread then pcall(task.cancel,M.mapFixerThread) M.mapFixerThread=nil end M.Status.mapFixer="Uit"
 end
 
-print("[MzD Hub] Core v9.9 Geladen")
+print("[MzD Hub] Core v10.0 Geladen")
 
 -- ============================================
 -- GUI
@@ -1576,7 +1692,7 @@ local SPD={"200","400","600","800","1000","1500","2000","INSTANT"}
 local SPM={["200"]=200,["400"]=400,["600"]=600,["800"]=800,["1000"]=1000,["1500"]=1500,["2000"]=2000,["INSTANT"]=9999}
 local CSPD={"100","200","300","400","500","600","800","1000"}
 
-local W=Fluent:CreateWindow({Title="MzD Hub",SubTitle="v9.9 - Escape Tsunami From Brainrot",TabWidth=160,Size=UDim2.fromOffset(600,500),Acrylic=true,Theme="Dark",MinimizeKey=Enum.KeyCode.RightControl})
+local W=Fluent:CreateWindow({Title="MzD Hub",SubTitle="v10.0 - Escape Tsunami From Brainrot",TabWidth=160,Size=UDim2.fromOffset(600,500),Acrylic=true,Theme="Dark",MinimizeKey=Enum.KeyCode.RightControl})
 
 -- FARM TAB
 local FT=W:AddTab({Title="Farm",Icon="swords"})
@@ -1615,7 +1731,7 @@ FT:AddDropdown("LBMutation",{Title="Mutatie",Values=MUT,Default="Any",Multi=fals
 local LBSP=FT:AddParagraph({Title="Lucky Block Status",Content="Idle"})
 local LBTG=FT:AddToggle("LBToggle",{Title="🎲 Auto Lucky Block Farm",Default=false})
 LBTG:OnChanged(function(v)
-    if v then M.findBase() M.startLuckyBlockFarm() Fluent:Notify({Title="Lucky Block",Content="Gestart!",Duration=3})
+    if v then M.findBase() M.startLuckyBlockFarm() Fluent:Notify({Title="Lucky Block",Content="Gestart! Ultrafast grab ✓",Duration=3})
     else M.stopLuckyBlockFarm() Fluent:Notify({Title="Lucky Block",Content="Gestopt. #"..M.Status.luckyBlockCount,Duration=3}) end
 end)
 
@@ -1634,7 +1750,7 @@ end)
 
 -- EVENTS TAB
 local ET=W:AddTab({Title="Events",Icon="party-popper"})
-ET:AddParagraph({Title="💝 Valentine",Content=""})
+ET:AddParagraph({Title="💝 Valentine",Content="Inleveren gaat zonder te bewegen naar het station!"})
 local VSP=ET:AddParagraph({Title="Status",Content="Idle"})
 local VTG=ET:AddToggle("ValentineToggle",{Title="💝 Valentine Farm",Default=false})
 VTG:OnChanged(function(v) if v then M.startValentine() else M.stopValentine() end end)
@@ -1778,10 +1894,10 @@ end)
 -- INIT
 task.spawn(function()
     task.wait(1) M.findBase() task.wait(0.5) M.detectWallZ()
-    if M.baseGUID then Fluent:Notify({Title="MzD Hub v9.9",Content="Base: "..M.baseGUID.."\nCoridor Z: "..string.format("%.1f",M.getCorridorZ()),Duration=5})
-    else Fluent:Notify({Title="MzD Hub v9.9",Content="Geladen! Klik 'Zoek Base' in Config.",Duration=5}) end
+    if M.baseGUID then Fluent:Notify({Title="MzD Hub v10.0",Content="Base: "..M.baseGUID.."\nCoridor Z: "..string.format("%.1f",M.getCorridorZ()),Duration=5})
+    else Fluent:Notify({Title="MzD Hub v10.0",Content="Geladen! Klik 'Zoek Base' in Config.",Duration=5}) end
 end)
 
 W:SelectTab(1)
-Fluent:Notify({Title="MzD Hub v9.9",Content="Geladen ✦ RightCtrl = minimaliseer",Duration=4})
-print("[MzD Hub] v9.9 VOLLEDIG GELADEN ✦")
+Fluent:Notify({Title="MzD Hub v10.0",Content="Geladen ✦ RightCtrl = minimaliseer",Duration=4})
+print("[MzD Hub] v10.0 VOLLEDIG GELADEN ✦")
