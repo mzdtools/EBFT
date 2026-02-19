@@ -1,6 +1,6 @@
 -- ============================================
--- MzD Hub v10.3 - FACTORY CYCLER EDITION
--- Fixed Factory Loop, Map Fixer v3.1, No Noclip
+-- MzD Hub v10.4 - FACTORY CYCLER EDITION (FIXED)
+-- Fixed Factory Loop (No Goto Syntax Error), Map Fixer v3.1
 -- ============================================
 getgenv().MzD = {}
 local M = getgenv().MzD
@@ -70,7 +70,7 @@ M.S = {
     FactoryEnabled = false,
     FactorySlot = "5",
     FactoryRarity = "Common",
-    FactoryMaxLevel = 250, -- Standaard doelwit level
+    FactoryMaxLevel = 250,
     FarmMode = "Collect, Place & Max",
     FarmSlot = "5",
     ValentineEnabled = false,
@@ -506,7 +506,6 @@ function M.toolMatchesRarity(tool, targetRarity, targetMutation)
     local toolRarity = tool:GetAttribute("Rarity")
     if not bName or bName == "" then return false end
     
-    -- Belangrijk: Voor Factory willen we alleen items die nog NIET max level zijn
     if lvl >= M.S.MaxLevel then return false end
     
     if toolRarity and M.isHighRarity(toolRarity) then
@@ -716,7 +715,6 @@ function M.startFarming()
                     task.wait(1) return
                 end
 
-                -- COLLECT PLACE & MAX
                 if not M.isSlotEmpty(ws) then
                     M.Status.farm = "Slot leegmaken..."
                     M.pickUpBrainrot(ws) task.wait(0.5)
@@ -990,7 +988,7 @@ function M.stopLuckyBlockFarm()
     M.Status.luckyBlock = "Idle"
 end
 
--- ========== FACTORY (FIXED CYCLE LOGIC) ==========
+-- ========== FACTORY (FIXED CYCLE LOGIC SONDER GOTO) ==========
 function M.startFactoryLoop()
     if M.factoryThread then return end
     M.S.FactoryEnabled = true M.Status.factoryCount = 0
@@ -1003,12 +1001,10 @@ function M.startFactoryLoop()
                 if not M.baseGUID then M.Status.factory = "Geen base!" task.wait(2) return end
                 local ws = tonumber(M.S.FactorySlot) or 5
 
-                -- Functie om items te vinden die nog NIET max level zijn
                 local function getFactoryTool()
                     local bp = Player:FindFirstChild("Backpack")
                     if bp then
                         for _, t in pairs(bp:GetChildren()) do
-                            -- Gebruik een specifieke check op level
                             local lvl = tonumber(t:GetAttribute("Level")) or 0
                             local toolRarity = t:GetAttribute("Rarity")
                             
@@ -1031,44 +1027,44 @@ function M.startFactoryLoop()
                     return nil
                 end
 
-                -- Stap 1: Check of slot leeg is, zo niet, pak op
+                local needsToPlace = true
+
                 if not M.isSlotEmpty(ws) then
                     local mb = workspace:FindFirstChild("Bases") and workspace.Bases:FindFirstChild(M.baseGUID)
                     local sm = mb and mb:FindFirstChild("slot " .. ws .. " brainrot")
                     if sm then
-                         -- Veiligheid: als er al iets staat, check of het de goede is en max level
                          local cur = tonumber(sm:GetAttribute("Level")) or 0
                          local r = sm:GetAttribute("Rarity")
                          if r == M.S.FactoryRarity and cur < M.S.FactoryMaxLevel then
-                             -- Hij staat er al en moet nog geupgrade worden! Sla plaatsen over.
-                             goto SKIP_PLACE
+                             needsToPlace = false
                          end
                     end
-                    M.pickUpBrainrot(ws) task.wait(0.5)
-                    M.safeUnequip() task.wait(0.3)
+                    
+                    if needsToPlace then
+                        M.pickUpBrainrot(ws) task.wait(0.5)
+                        M.safeUnequip() task.wait(0.3)
+                    end
                 end
 
-                -- Stap 2: Zoek nieuwe tool
-                local tool = getFactoryTool()
-                if not tool then 
-                    stopR = "Geen " .. M.S.FactoryRarity .. " < Lv."..M.S.FactoryMaxLevel.." gevonden!" 
-                    M.S.FactoryEnabled = false 
-                    return 
+                if needsToPlace then
+                    local tool = getFactoryTool()
+                    if not tool then 
+                        stopR = "Geen " .. M.S.FactoryRarity .. " < Lv."..M.S.FactoryMaxLevel.." gevonden!" 
+                        M.S.FactoryEnabled = false 
+                        return 
+                    end
+
+                    local bName = tool:GetAttribute("BrainrotName") or "Item"
+                    M.Status.factory = "Plaatsen " .. bName
+                    M.safeEquip(tool) task.wait(0.5)
+                    M.placeBrainrot(ws) task.wait(0.8)
+
+                    if M.isSlotEmpty(ws) then 
+                        M.safeUnequip() task.wait(1) 
+                        return 
+                    end
                 end
 
-                local bName = tool:GetAttribute("BrainrotName") or "Item"
-                M.Status.factory = "Plaatsen " .. bName
-                M.safeEquip(tool) task.wait(0.5)
-                M.placeBrainrot(ws) task.wait(0.8)
-
-                if M.isSlotEmpty(ws) then 
-                    M.safeUnequip() task.wait(1) 
-                    return -- Probeer opnieuw
-                end
-
-                ::SKIP_PLACE::
-
-                -- Stap 3: Upgraden tot max
                 local mb = workspace:FindFirstChild("Bases") and workspace.Bases:FindFirstChild(M.baseGUID)
                 local sm = mb and mb:FindFirstChild("slot " .. ws .. " brainrot")
                 
@@ -1081,7 +1077,7 @@ function M.startFactoryLoop()
                     
                     while cur < M.S.FactoryMaxLevel and M.S.FactoryEnabled do
                         M.upgradeBrainrot(ws) 
-                        task.wait(0.05) -- Snelle kliks
+                        task.wait(0.05)
                         local nw = tonumber(sm:GetAttribute("Level")) or cur
                         
                         if nw > cur then 
@@ -1099,7 +1095,6 @@ function M.startFactoryLoop()
                     end
                 end
                 
-                -- Stap 4: Is hij klaar? Pak hem op (zodat hij in backpack komt als maxed)
                 task.wait(0.3) 
                 M.pickUpBrainrot(ws) 
                 task.wait(0.8) 
@@ -1800,7 +1795,7 @@ function M.stopMapFixer()
     M.Status.mapFixer = "Off"
 end
 
-print("[MzD Hub] Core v10.3 Geladen")
+print("[MzD Hub] Core v10.4 Geladen")
 
 -- ============================================
 -- GUI
@@ -1828,7 +1823,7 @@ local SPD={"200","400","600","800","1000","1500","2000","INSTANT"}
 local SPM={["200"]=200,["400"]=400,["600"]=600,["800"]=800,["1000"]=1000,["1500"]=1500,["2000"]=2000,["INSTANT"]=9999}
 local CSPD={"100","200","300","400","500","600","800","1000"}
 
-local W=Fluent:CreateWindow({Title="MzD Hub",SubTitle="v10.3 - Factory Cycler Edition",TabWidth=160,Size=UDim2.fromOffset(600,500),Acrylic=true,Theme="Dark",MinimizeKey=Enum.KeyCode.RightControl})
+local W=Fluent:CreateWindow({Title="MzD Hub",SubTitle="v10.4 - Factory Cycler Edition",TabWidth=160,Size=UDim2.fromOffset(600,500),Acrylic=true,Theme="Dark",MinimizeKey=Enum.KeyCode.RightControl})
 
 -- FARM TAB
 local FT=W:AddTab({Title="Farm",Icon="swords"})
@@ -1980,10 +1975,10 @@ end)
 -- INIT
 task.spawn(function()
     task.wait(1) M.findBase() 
-    if M.baseGUID then Fluent:Notify({Title="MzD Hub v10.3",Content="Base: "..M.baseGUID.."\nCoridor Z: "..string.format("%.1f",M.getCorridorZ()),Duration=5})
-    else Fluent:Notify({Title="MzD Hub v10.3",Content="Geladen! Klik 'Zoek Base' in Config.",Duration=5}) end
+    if M.baseGUID then Fluent:Notify({Title="MzD Hub v10.4",Content="Base: "..M.baseGUID.."\nCoridor Z: "..string.format("%.1f",M.getCorridorZ()),Duration=5})
+    else Fluent:Notify({Title="MzD Hub v10.4",Content="Geladen! Klik 'Zoek Base' in Config.",Duration=5}) end
 end)
 
 W:SelectTab(1)
-Fluent:Notify({Title="MzD Hub v10.3",Content="Geladen ✦ RightCtrl = minimaliseer",Duration=4})
-print("[MzD Hub] v10.3 VOLLEDIG GELADEN ✦")
+Fluent:Notify({Title="MzD Hub v10.4",Content="Geladen ✦ RightCtrl = minimaliseer",Duration=4})
+print("[MzD Hub] v10.4 VOLLEDIG GELADEN ✦")
