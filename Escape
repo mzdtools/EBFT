@@ -1,6 +1,6 @@
 -- ============================================
--- MzD Hub v10.4 - VOLLEDIG
--- Snellere tweens, corridor 1500 default, factory turbo, geen noclip
+-- MzD Hub v10.5 - VOLLEDIG
+-- Valentine fix, submit debug, snelle tweens
 -- ============================================
 getgenv().MzD = {}
 local M = getgenv().MzD
@@ -93,6 +93,8 @@ M.mapFixerThread = nil
 M.lastMapName = ""
 M._valentineCachedParts = {}
 M._valentineLastCacheScan = 0
+M._valentineFoundRemotes = {}
+M._valentineDebugLog = {}
 M.luckyBlockThread = nil
 M._godThread = nil
 M._isGod = false
@@ -508,7 +510,7 @@ local function factoryToolMatchesRarity(tool)
     return true
 end
 
--- ========== FACTORY (TURBO VERSIE) ==========
+-- ========== FACTORY ==========
 function M.startFactoryLoop()
     if M.factoryThread then return end
     M.S.FactoryEnabled = true
@@ -517,131 +519,71 @@ function M.startFactoryLoop()
 
     M.factoryThread = task.spawn(function()
         local stopReason = "Idle"
-
         while M.S.FactoryEnabled do
             local ok, err = pcall(function()
                 M.Status.factory = "Scanning..."
                 if not M.baseGUID then M.findBase() end
-                if not M.baseGUID then
-                    M.Status.factory = "Geen base gevonden!"
-                    task.wait(2) return
-                end
-
+                if not M.baseGUID then M.Status.factory = "Geen base gevonden!" task.wait(2) return end
                 local ws = tonumber(M.S.FactorySlot) or 5
-
-                M.tweenToSlot(ws)
-                task.wait(0.2)
-
+                M.tweenToSlot(ws) task.wait(0.2)
                 if not M.isSlotEmpty(ws) then
                     M.Status.factory = "Slot " .. ws .. " leegmaken..."
-                    M.pickUpBrainrot(ws)
-                    task.wait(1)
-                    pcall(function() Player.Character.Humanoid:UnequipTools() end)
-                    task.wait(0.5)
+                    M.pickUpBrainrot(ws) task.wait(1)
+                    pcall(function() Player.Character.Humanoid:UnequipTools() end) task.wait(0.5)
                 end
-
                 local tool = nil
                 local scanAttempts = 0
                 local maxScanAttempts = 5
-
                 while not tool and scanAttempts < maxScanAttempts do
                     scanAttempts += 1
                     M.Status.factory = "Scannen backpack... (" .. scanAttempts .. "/" .. maxScanAttempts .. ")"
-
                     local bp = Player:FindFirstChild("Backpack")
                     if bp then
                         for _, t in pairs(bp:GetChildren()) do
-                            if t:IsA("Tool") and factoryToolMatchesRarity(t) then
-                                tool = t break
-                            end
+                            if t:IsA("Tool") and factoryToolMatchesRarity(t) then tool = t break end
                         end
                     end
-
                     if not tool and Player.Character then
                         local eq = Player.Character:FindFirstChildWhichIsA("Tool")
-                        if eq and factoryToolMatchesRarity(eq) then
-                            tool = eq
-                        end
+                        if eq and factoryToolMatchesRarity(eq) then tool = eq end
                     end
-
-                    if not tool and scanAttempts < maxScanAttempts then
-                        task.wait(0.6)
-                    end
+                    if not tool and scanAttempts < maxScanAttempts then task.wait(0.6) end
                 end
-
                 if not tool then
                     stopReason = "Klaar! Alle " .. M.S.FactoryRarity .. " (" .. M.S.FactoryMutation .. ") gemaxt ✓"
-                    M.S.FactoryEnabled = false
-                    return
+                    M.S.FactoryEnabled = false return
                 end
-
                 local bName = tool:GetAttribute("BrainrotName") or "Item"
                 M.Status.factory = "Bezig: " .. bName
-
                 local hum = Player.Character and Player.Character:FindFirstChild("Humanoid")
                 if hum then hum:EquipTool(tool) task.wait(0.5) end
-
                 M.Status.factory = "Plaatsen: " .. bName
-                M.placeBrainrot(ws)
-                task.wait(0.8)
-
+                M.placeBrainrot(ws) task.wait(0.8)
                 if M.isSlotEmpty(ws) then
                     M.Status.factory = "Plaatsen mislukt, retry..."
-                    pcall(function() if hum then hum:UnequipTools() end end)
-                    task.wait(1)
-                    return
+                    pcall(function() if hum then hum:UnequipTools() end end) task.wait(1) return
                 end
-
                 local myBase = workspace:FindFirstChild("Bases") and workspace.Bases:FindFirstChild(M.baseGUID)
                 local sm = myBase and myBase:FindFirstChild("slot " .. ws .. " brainrot")
-
                 if sm then
                     local cur = tonumber(sm:GetAttribute("Level")) or 0
                     local fails = 0
-
                     while cur < M.S.FactoryMaxLevel and M.S.FactoryEnabled do
-                        for i = 1, 3 do
-                            task.spawn(function()
-                                M.upgradeBrainrot(ws)
-                            end)
-                        end
-
+                        for i = 1, 3 do task.spawn(function() M.upgradeBrainrot(ws) end) end
                         task.wait()
-
                         local nw = tonumber(sm:GetAttribute("Level")) or cur
-                        if nw > cur then
-                            fails = 0
-                            cur = nw
-                            M.Status.factory = bName .. " Lv." .. cur .. "/" .. M.S.FactoryMaxLevel
-                        else
-                            fails += 1
-                            if fails > 60 then
-                                stopReason = "Geld op bij Lv." .. cur .. "!"
-                                M.S.FactoryEnabled = false
-                                break
-                            end
-                        end
+                        if nw > cur then fails = 0 cur = nw M.Status.factory = bName .. " Lv." .. cur .. "/" .. M.S.FactoryMaxLevel
+                        else fails += 1 if fails > 60 then stopReason = "Geld op bij Lv." .. cur .. "!" M.S.FactoryEnabled = false break end end
                     end
                 end
-
                 M.Status.factory = "Oprapen: " .. bName
-                task.wait(0.5)
-                M.pickUpBrainrot(ws)
-                task.wait(1.2)
+                task.wait(0.5) M.pickUpBrainrot(ws) task.wait(1.2)
                 M.Status.factoryCount += 1
-                pcall(function() if hum then hum:UnequipTools() end end)
-                task.wait(0.5)
-
+                pcall(function() if hum then hum:UnequipTools() end end) task.wait(0.5)
                 M.Status.factory = "✓ " .. bName .. " klaar! (#" .. M.Status.factoryCount .. ")"
             end)
-
-            if not ok then
-                warn("[MzD Factory] " .. tostring(err))
-                M.Status.factory = "Fout! Retry..."
-                task.wait(1)
-            end
+            if not ok then warn("[MzD Factory] " .. tostring(err)) M.Status.factory = "Fout! Retry..." task.wait(1) end
         end
-
         M.Status.factory = stopReason
         M.factoryThread = nil
     end)
@@ -650,11 +592,7 @@ end
 function M.stopFactoryLoop()
     M.S.FactoryEnabled = false
     if M.factoryThread then pcall(task.cancel, M.factoryThread) M.factoryThread = nil end
-    if not (
-        string.find(M.Status.factory or "", "✓") or
-        string.find(M.Status.factory or "", "Klaar") or
-        string.find(M.Status.factory or "", "Geld op")
-    ) then
+    if not (string.find(M.Status.factory or "", "✓") or string.find(M.Status.factory or "", "Klaar") or string.find(M.Status.factory or "", "Geld op")) then
         M.Status.factory = "Idle"
     end
 end
@@ -664,9 +602,7 @@ function M.findTargetToolInBackpack()
     local bp = Player:FindFirstChild("Backpack")
     if bp then
         for _, t in pairs(bp:GetChildren()) do
-            if t:IsA("Tool") and M.toolMatchesRarity(t, M.S.TargetRarity, M.S.TargetMutation) then
-                return t
-            end
+            if t:IsA("Tool") and M.toolMatchesRarity(t, M.S.TargetRarity, M.S.TargetMutation) then return t end
         end
     end
     local ch = Player.Character
@@ -769,16 +705,11 @@ function M.upgradeSlotToMax(slot)
     local cur = tonumber(sm:GetAttribute("Level")) or 1
     local fails = 0
     while cur < M.S.MaxLevel and M.S.AutoUpgrade do
-        for i = 1, 3 do
-            task.spawn(function() M.upgradeBrainrot(slot) end)
-        end
+        for i = 1, 3 do task.spawn(function() M.upgradeBrainrot(slot) end) end
         task.wait()
         local nw = tonumber(sm:GetAttribute("Level")) or cur
-        if nw > cur then
-            fails = 0 cur = nw M.Status.upgradeCount += 1
-        else
-            fails += 1 if fails >= 60 then break end
-        end
+        if nw > cur then fails = 0 cur = nw M.Status.upgradeCount += 1
+        else fails += 1 if fails >= 60 then break end end
     end
 end
 
@@ -798,8 +729,7 @@ function M.startFarming()
                 if M.isDead() then
                     M.Status.farm = "Dood! Wachten..."
                     M.waitForRespawn() task.wait(1)
-                    M.setHomePosition() M.enableGod() task.wait(0.5)
-                    return
+                    M.setHomePosition() M.enableGod() task.wait(0.5) return
                 end
                 local ch = Player.Character
                 local hum = ch and ch:FindFirstChild("Humanoid")
@@ -852,13 +782,11 @@ function M.startFarming()
                 end
 
                 local tool = M.findTargetToolInBackpack()
-
                 if tool and M.isHighRarityTool(tool) then
                     local rr = tool:GetAttribute("Rarity") or "High"
                     local bn = tool:GetAttribute("BrainrotName") or "?"
                     M.Status.farm = "✓ " .. rr .. " in backpack: " .. bn
-                    M.Status.farmCount += 1 task.wait(0.5)
-                    tool = nil
+                    M.Status.farmCount += 1 task.wait(0.5) tool = nil
                 end
 
                 if not tool then
@@ -929,18 +857,13 @@ function M.startFarming()
                     local cur = tonumber(sm:GetAttribute("Level")) or 0
                     local fails = 0
                     while cur < M.S.MaxLevel and M.S.Farming do
-                        for i = 1, 3 do
-                            task.spawn(function() M.upgradeBrainrot(ws) end)
-                        end
+                        for i = 1, 3 do task.spawn(function() M.upgradeBrainrot(ws) end) end
                         task.wait()
                         local nw = tonumber(sm:GetAttribute("Level")) or cur
                         if nw > cur then
                             fails = 0 cur = nw M.Status.upgradeCount += 1
                             M.Status.farm = bName .. " Lv." .. cur .. "/" .. M.S.MaxLevel
-                        else
-                            fails += 1
-                            if fails > 60 then task.wait(1) break end
-                        end
+                        else fails += 1 if fails > 60 then task.wait(1) break end end
                     end
                 end
                 M.Status.farm = bName .. " KLAAR!"
@@ -1055,8 +978,7 @@ function M.startLuckyBlockFarm()
                 if M.isDead() then
                     M.Status.luckyBlock = "Dood! Wachten..."
                     M.waitForRespawn() task.wait(1)
-                    M.setHomePosition() M.enableGod() task.wait(0.5)
-                    return
+                    M.setHomePosition() M.enableGod() task.wait(0.5) return
                 end
                 if not M.ActiveLuckyBlocks then M.ActiveLuckyBlocks = workspace:FindFirstChild("ActiveLuckyBlocks") end
                 if not M.ActiveLuckyBlocks then M.Status.luckyBlock = "Geen folder!" task.wait(3) return end
@@ -1093,10 +1015,7 @@ function M.startLuckyBlockFarm()
                         break
                     end
                 end
-                if not foundBlock then
-                    M.Status.luckyBlock = "Geen blocks, wachten..."
-                    task.wait(2)
-                end
+                if not foundBlock then M.Status.luckyBlock = "Geen blocks, wachten..." task.wait(2) end
             end)
             if not ok then warn("[MzD LB] " .. tostring(err)) task.wait(1) end
             task.wait(0.1)
@@ -1243,33 +1162,347 @@ function M.setupInstant()
 end
 M.setupInstant()
 
--- ========== VALENTINE ==========
+-- ========== VALENTINE HELPERS ==========
+function M.getHeartCount()
+    local count = 0
+    -- Methode 1: leaderstats
+    pcall(function()
+        local ls = Player:FindFirstChild("leaderstats")
+        if ls then
+            for _, v in pairs(ls:GetChildren()) do
+                local n = v.Name:lower()
+                if n:find("heart") or n:find("candy") or n:find("valentine") or n:find("gram") or n:find("love") then
+                    count = tonumber(v.Value) or 0
+                    return
+                end
+            end
+        end
+    end)
+    -- Methode 2: Player attributes
+    if count == 0 then
+        pcall(function()
+            for _, attr in pairs({"Hearts","Candy","CandyGrams","Valentines","Love","CandyHearts","ValentineHearts"}) do
+                local v = Player:GetAttribute(attr)
+                if v and tonumber(v) and tonumber(v) > 0 then
+                    count = tonumber(v) return
+                end
+            end
+        end)
+    end
+    -- Methode 3: Character attributes
+    if count == 0 then
+        pcall(function()
+            local ch = Player.Character
+            if ch then
+                for _, attr in pairs({"Hearts","Candy","CandyGrams","Valentines"}) do
+                    local v = ch:GetAttribute(attr)
+                    if v and tonumber(v) and tonumber(v) > 0 then
+                        count = tonumber(v) return
+                    end
+                end
+            end
+        end)
+    end
+    -- Methode 4: PlayerGui tekst scannen
+    if count == 0 then
+        pcall(function()
+            for _, gui in pairs(Player.PlayerGui:GetDescendants()) do
+                if gui:IsA("TextLabel") then
+                    local txt = gui.Text:lower()
+                    if txt:find("heart") or txt:find("candy") or txt:find("/100") or txt:find("gram") then
+                        local num = gui.Text:match("(%d+)")
+                        if num and tonumber(num) > 0 then count = tonumber(num) return end
+                    end
+                end
+            end
+        end)
+    end
+    -- Methode 5: Zoek in alle value objects onder player
+    if count == 0 then
+        pcall(function()
+            for _, v in pairs(Player:GetDescendants()) do
+                if (v:IsA("IntValue") or v:IsA("NumberValue")) then
+                    local n = v.Name:lower()
+                    if n:find("heart") or n:find("candy") or n:find("gram") or n:find("valentine") then
+                        if tonumber(v.Value) and tonumber(v.Value) > 0 then
+                            count = tonumber(v.Value) return
+                        end
+                    end
+                end
+            end
+        end)
+    end
+    return count
+end
+
+function M.refreshValentineCache()
+    M._valentineCachedParts = {}
+    M._valentineLastCacheScan = tick()
+
+    local keywords = {"heart","candy","valentine","love","gram","pickup","collect","token","coin"}
+
+    local function shouldCache(obj)
+        if not obj:IsA("BasePart") then return false end
+        local n = obj.Name:lower()
+        for _, k in pairs(keywords) do
+            if n:find(k) then return true end
+        end
+        if obj.Parent then
+            local pn = obj.Parent.Name:lower()
+            for _, k in pairs(keywords) do
+                if pn:find(k) then return true end
+            end
+            -- Grootouder check
+            if obj.Parent.Parent then
+                local gpn = obj.Parent.Parent.Name:lower()
+                for _, k in pairs(keywords) do
+                    if gpn:find(k) then return true end
+                end
+            end
+        end
+        if obj:FindFirstChild("TouchInterest") then return true end
+        return false
+    end
+
+    -- Scan workspace
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if shouldCache(obj) then
+            table.insert(M._valentineCachedParts, obj)
+        end
+    end
+
+    -- Scan event folders
+    local eventFolders = {
+        "ValentineItems","Hearts","CandyGrams","Valentines",
+        "EventItems","Collectibles","Pickups","CandyHearts",
+        "ValentineEvent","EventCollectibles","Tokens","Coins"
+    }
+    for _, fn in pairs(eventFolders) do
+        local f = workspace:FindFirstChild(fn)
+        if f then
+            for _, d in pairs(f:GetDescendants()) do
+                if d:IsA("BasePart") then
+                    table.insert(M._valentineCachedParts, d)
+                end
+            end
+        end
+    end
+
+    -- Scan alle models/folders met event-achtige namen
+    for _, c in pairs(workspace:GetChildren()) do
+        if c:IsA("Model") or c:IsA("Folder") then
+            local cn = c.Name:lower()
+            if cn:find("valentine") or cn:find("event") or cn:find("heart") or cn:find("candy") then
+                for _, d in pairs(c:GetDescendants()) do
+                    if d:IsA("BasePart") and d:FindFirstChild("TouchInterest") then
+                        table.insert(M._valentineCachedParts, d)
+                    end
+                end
+            end
+        end
+    end
+end
+
+function M._valentineOnDescAdded(d)
+    if not M.S.ValentineEnabled then return end
+
+    local keywords = {"heart","candy","valentine","love","gram","pickup","collect","token"}
+
+    if d:IsA("BasePart") then
+        local n = d.Name:lower()
+        local matched = false
+        for _, k in pairs(keywords) do
+            if n:find(k) then matched = true break end
+        end
+        if not matched and d.Parent then
+            local pn = d.Parent.Name:lower()
+            for _, k in pairs(keywords) do
+                if pn:find(k) then matched = true break end
+            end
+        end
+        if not matched and d:FindFirstChild("TouchInterest") then matched = true end
+        if matched then
+            table.insert(M._valentineCachedParts, d)
+            pcall(function()
+                local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    firetouchinterest(hrp, d, 0)
+                    firetouchinterest(hrp, d, 1)
+                end
+            end)
+        end
+    end
+
+    if d:IsA("ProximityPrompt") then
+        pcall(function() d.HoldDuration = 0 d.MaxActivationDistance = 99999 end)
+    end
+end
+
+-- ========== VALENTINE REMOTE SCANNER & DEBUG ==========
+function M.scanValentineRemotes()
+    M._valentineFoundRemotes = {}
+    M._valentineDebugLog = {}
+
+    local keywords = {"valentine","candy","heart","gram","gift","submit","turn","exchange","redeem","deliver","deposit","collect","love","token"}
+
+    local function addLog(msg)
+        table.insert(M._valentineDebugLog, msg)
+        print("[MzD V-Debug] " .. msg)
+    end
+
+    -- Scan ReplicatedStorage recursief
+    local function scanFolder(parent, path, depth)
+        if depth > 10 then return end
+        for _, v in pairs(parent:GetChildren()) do
+            local n = v.Name:lower()
+            local fullPath = path .. "/" .. v.Name
+            local matched = false
+            for _, k in pairs(keywords) do
+                if n:find(k) then matched = true break end
+            end
+            if matched then
+                local rType = "Unknown"
+                if v:IsA("RemoteEvent") then rType = "RemoteEvent"
+                elseif v:IsA("RemoteFunction") then rType = "RemoteFunction"
+                elseif v:IsA("BindableEvent") then rType = "BindableEvent"
+                elseif v:IsA("BindableFunction") then rType = "BindableFunction"
+                else rType = v.ClassName end
+
+                table.insert(M._valentineFoundRemotes, {
+                    name = v.Name,
+                    path = fullPath,
+                    type = rType,
+                    object = v
+                })
+                addLog("✓ " .. rType .. ": " .. fullPath)
+            end
+            scanFolder(v, fullPath, depth + 1)
+        end
+    end
+
+    addLog("=== VALENTINE REMOTE SCAN ===")
+
+    -- ReplicatedStorage
+    pcall(function()
+        addLog("Scanning ReplicatedStorage...")
+        scanFolder(game:GetService("ReplicatedStorage"), "RS", 0)
+    end)
+
+    -- Workspace (voor stations)
+    pcall(function()
+        addLog("Scanning Workspace voor stations...")
+        local stationKeywords = {"station","gram","submit","turn","exchange","valentine","heart","candy"}
+        for _, c in pairs(workspace:GetDescendants()) do
+            if c:IsA("ProximityPrompt") then
+                local pn = c.Parent and c.Parent.Name:lower() or ""
+                local ppn = c.Parent and c.Parent.Parent and c.Parent.Parent.Name:lower() or ""
+                for _, k in pairs(stationKeywords) do
+                    if pn:find(k) or ppn:find(k) then
+                        table.insert(M._valentineFoundRemotes, {
+                            name = c.Name,
+                            path = "WS/" .. (c.Parent and c.Parent.Name or "?") .. "/" .. c.Name,
+                            type = "ProximityPrompt",
+                            object = c
+                        })
+                        addLog("✓ Prompt: " .. (c.Parent and c.Parent.Name or "?") .. "/" .. c.Name)
+                        break
+                    end
+                end
+            end
+        end
+    end)
+
+    -- Scan player values
+    pcall(function()
+        addLog("Scanning Player values...")
+        for _, v in pairs(Player:GetDescendants()) do
+            if v:IsA("IntValue") or v:IsA("NumberValue") or v:IsA("StringValue") then
+                local n = v.Name:lower()
+                for _, k in pairs(keywords) do
+                    if n:find(k) then
+                        addLog("✓ Value: " .. v:GetFullName() .. " = " .. tostring(v.Value))
+                        break
+                    end
+                end
+            end
+        end
+        -- Attributes
+        for _, attr in pairs({"Hearts","Candy","CandyGrams","Valentines","Love","CandyHearts","ValentineHearts"}) do
+            local v = Player:GetAttribute(attr)
+            if v ~= nil then
+                addLog("✓ Attr: Player." .. attr .. " = " .. tostring(v))
+            end
+        end
+    end)
+
+    addLog("=== Gevonden: " .. #M._valentineFoundRemotes .. " remotes/prompts ===")
+    addLog("Hearts count: " .. M.getHeartCount())
+
+    return M._valentineFoundRemotes, M._valentineDebugLog
+end
+
+-- ========== VALENTINE SUBMIT (VERBETERD) ==========
 function M.submitHearts()
     local submitted = false
+    local submitLog = {}
+
+    local function addLog(msg)
+        table.insert(submitLog, msg)
+    end
+
+    -- Methode 1: Alle gevonden remotes van scan gebruiken
+    if #M._valentineFoundRemotes > 0 then
+        for _, remote in pairs(M._valentineFoundRemotes) do
+            local obj = remote.object
+            if obj and obj.Parent then
+                if remote.type == "RemoteEvent" then
+                    pcall(function() obj:FireServer() addLog("Fire: " .. remote.path) submitted = true end)
+                    pcall(function() obj:FireServer(true) end)
+                    pcall(function() obj:FireServer(Player.Character) end)
+                    pcall(function() obj:FireServer("submit") end)
+                    pcall(function() obj:FireServer("Submit") end)
+                    pcall(function() obj:FireServer(100) end)
+                elseif remote.type == "RemoteFunction" then
+                    pcall(function() obj:InvokeServer() addLog("Invoke: " .. remote.path) submitted = true end)
+                    pcall(function() obj:InvokeServer(true) end)
+                    pcall(function() obj:InvokeServer("submit") end)
+                    pcall(function() obj:InvokeServer("Submit") end)
+                    pcall(function() obj:InvokeServer(100) end)
+                elseif remote.type == "ProximityPrompt" then
+                    pcall(function()
+                        obj.MaxActivationDistance = math.huge
+                        obj.HoldDuration = 0
+                        fireproximityprompt(obj)
+                        addLog("Prompt: " .. remote.path)
+                        submitted = true
+                    end)
+                end
+            end
+        end
+    end
+
+    -- Methode 2: Brede scan ReplicatedStorage (backup)
     pcall(function()
         local rs = game:GetService("ReplicatedStorage")
-        local keywords = {
-            "valentine","candy","submit","heart","gram","gift",
-            "collect","turn","exchange","redeem","deliver","deposit"
-        }
+        local keywords = {"valentine","candy","submit","heart","gram","gift","collect","turn","exchange","redeem","deliver","deposit","love"}
         local function searchRemotes(parent, depth)
             if depth > 8 then return end
             for _, v in pairs(parent:GetChildren()) do
                 local n = v.Name:lower()
                 local matched = false
-                for _, k in pairs(keywords) do
-                    if n:find(k) then matched = true break end
-                end
+                for _, k in pairs(keywords) do if n:find(k) then matched = true break end end
                 if matched then
                     if v:IsA("RemoteEvent") then
                         pcall(function() v:FireServer() end)
-                        pcall(function() v:FireServer(Player.Character) end)
                         pcall(function() v:FireServer(true) end)
+                        pcall(function() v:FireServer("submit") end)
+                        pcall(function() v:FireServer(Player.Character) end)
                         pcall(function() v:FireServer(100) end)
                         submitted = true
                     elseif v:IsA("RemoteFunction") then
                         pcall(function() v:InvokeServer() end)
                         pcall(function() v:InvokeServer(true) end)
+                        pcall(function() v:InvokeServer("submit") end)
                         pcall(function() v:InvokeServer(100) end)
                         submitted = true
                     end
@@ -1279,97 +1512,107 @@ function M.submitHearts()
         end
         searchRemotes(rs, 0)
     end)
+
+    -- Methode 3: Net/RF packages
     pcall(function()
         local net = game:GetService("ReplicatedStorage"):FindFirstChild("Packages")
         if net then net = net:FindFirstChild("Net") end
         if not net then return end
         for _, v in pairs(net:GetDescendants()) do
             local n = v.Name:lower()
-            if n:find("candy") or n:find("heart") or n:find("valentine") or n:find("gram") then
+            if n:find("candy") or n:find("heart") or n:find("valentine") or n:find("gram") or n:find("submit") or n:find("collect") then
                 if v:IsA("RemoteFunction") then
-                    pcall(function() v:InvokeServer() end)
+                    pcall(function() v:InvokeServer() submitted = true end)
                     pcall(function() v:InvokeServer(true) end)
-                    submitted = true
+                    pcall(function() v:InvokeServer("submit") end)
                 elseif v:IsA("RemoteEvent") then
-                    pcall(function() v:FireServer() end)
-                    submitted = true
+                    pcall(function() v:FireServer() submitted = true end)
+                    pcall(function() v:FireServer(true) end)
+                    pcall(function() v:FireServer("submit") end)
                 end
             end
         end
     end)
+
+    -- Methode 4: Proximity Prompts op stations in workspace
     pcall(function()
         local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
         if not hrp then return end
-        local stationNames = {
-            "CandyGramStation","HeartStation","ValentineStation",
-            "SubmitStation","CollectStation","TurnInStation","ExchangeStation"
-        }
-        local function tryStation(obj)
-            for _, d in pairs(obj:GetDescendants()) do
-                if d:IsA("ProximityPrompt") then
+        for _, d in pairs(workspace:GetDescendants()) do
+            if d:IsA("ProximityPrompt") then
+                local pn = d.Parent and d.Parent.Name:lower() or ""
+                local ppn = d.Parent and d.Parent.Parent and d.Parent.Parent.Name:lower() or ""
+                if pn:find("station") or pn:find("gram") or pn:find("submit") or pn:find("valentine") or pn:find("heart") or
+                    ppn:find("station") or ppn:find("gram") or ppn:find("submit") or ppn:find("valentine") then
                     pcall(function()
                         d.MaxActivationDistance = math.huge
                         d.HoldDuration = 0
-                        task.wait(0.02)
                         fireproximityprompt(d)
-                        task.wait(0.05)
-                        fireproximityprompt(d)
+                        submitted = true
                     end)
-                    submitted = true
                 end
-                if d:IsA("BasePart") then
+            end
+        end
+        -- Touch alle station parts
+        for _, d in pairs(workspace:GetDescendants()) do
+            if d:IsA("BasePart") then
+                local n = d.Name:lower()
+                local pn = d.Parent and d.Parent.Name:lower() or ""
+                if n:find("station") or n:find("submit") or n:find("gram") or
+                    pn:find("station") or pn:find("submit") or pn:find("gram") then
                     pcall(function() firetouchinterest(hrp, d, 0) end)
-                    task.wait(0.01)
                     pcall(function() firetouchinterest(hrp, d, 1) end)
                 end
             end
         end
-        local function searchWS(parent, depth)
-            if depth > 5 then return end
-            for _, c in pairs(parent:GetChildren()) do
-                local n = c.Name
-                for _, sn in pairs(stationNames) do
-                    if n == sn or n:lower():find("station") or n:lower():find("gram") then
-                        tryStation(c)
-                        break
-                    end
-                end
-                if c:IsA("Model") or c:IsA("Folder") then
-                    searchWS(c, depth + 1)
-                end
-            end
-        end
-        searchWS(workspace, 0)
     end)
+
+    -- Methode 5: PlotAction proberen (misschien heeft het game een submit via PlotAction)
+    pcall(function()
+        if M.PlotAction then
+            pcall(function() M.PlotAction:InvokeServer("Submit Hearts") end)
+            pcall(function() M.PlotAction:InvokeServer("Submit Candy") end)
+            pcall(function() M.PlotAction:InvokeServer("Submit CandyGram") end)
+            pcall(function() M.PlotAction:InvokeServer("Collect Valentine") end)
+        end
+    end)
+
+    -- Methode 6: Alle RemoteEvents in hele game met relevante namen
     pcall(function()
         for _, v in pairs(game:GetDescendants()) do
             if v:IsA("RemoteEvent") then
                 local n = v.Name:lower()
-                if n:find("candy") or n:find("heart") or n:find("valentine") or n:find("gram") then
+                if n:find("candy") or n:find("heart") or n:find("valentine") or n:find("gram") or n:find("submit") then
                     pcall(function() v:FireServer() end)
                     pcall(function() v:FireServer(true) end)
+                    pcall(function() v:FireServer("submit") end)
                     submitted = true
                 end
             end
         end
     end)
+
+    M._lastSubmitLog = submitLog
     return submitted
 end
 
+-- ========== VALENTINE MAIN ==========
 function M.startValentine()
     if M.valentineThread then return end
     M.S.ValentineEnabled = true
     M.Status.valentineCount = 0
     M._valentineCollecting = true
+
+    -- Eerste scan voor remotes
+    M.scanValentineRemotes()
     M.refreshValentineCache()
 
-    if M._valentineDescAddedConn then
-        pcall(function() M._valentineDescAddedConn:Disconnect() end)
-    end
+    if M._valentineDescAddedConn then pcall(function() M._valentineDescAddedConn:Disconnect() end) end
     M._valentineDescAddedConn = workspace.DescendantAdded:Connect(function(d)
         pcall(function() M._valentineOnDescAdded(d) end)
     end)
 
+    -- Heartbeat collector
     M.valentineCollectorConn = RunService.Heartbeat:Connect(function()
         if not M.S.ValentineEnabled or not M._valentineCollecting then return end
         pcall(function()
@@ -1392,6 +1635,7 @@ function M.startValentine()
         end)
     end)
 
+    -- Turbo thread
     M.valentineTurboThread = task.spawn(function()
         while M.S.ValentineEnabled do
             if M._valentineCollecting then
@@ -1410,6 +1654,7 @@ function M.startValentine()
         end
     end)
 
+    -- Noclip voor valentine
     M.valentineNoclipConn = RunService.Stepped:Connect(function()
         if not M.S.ValentineEnabled then return end
         pcall(function()
@@ -1421,20 +1666,24 @@ function M.startValentine()
         end)
     end)
 
+    -- Hoofd loop
     M.valentineThread = task.spawn(function()
         local submitCooldown = 0
+        local remoteScanCooldown = 0
 
         while M.S.ValentineEnabled do
             local ok, err = pcall(function()
+                -- Periodiek remotes opnieuw scannen (elke 60 seconden)
+                if tick() - remoteScanCooldown > 60 then
+                    M.scanValentineRemotes()
+                    remoteScanCooldown = tick()
+                end
+
                 local h = M.getHeartCount()
-                M.Status.valentine = "Collecten " .. h .. "/100 | #" .. M.Status.valentineCount
+                M.Status.valentine = "Collecten " .. h .. " | Cache:" .. #M._valentineCachedParts .. " | R:" .. #M._valentineFoundRemotes .. " | #" .. M.Status.valentineCount
 
                 if h >= 100 then
-                    if tick() - submitCooldown < 1 then
-                        task.wait(0.2)
-                        return
-                    end
-
+                    if tick() - submitCooldown < 1 then task.wait(0.2) return end
                     M.Status.valentine = "Inleveren... (" .. h .. " harten)"
                     M._valentineCollecting = false
                     task.wait(0.3)
@@ -1442,13 +1691,11 @@ function M.startValentine()
                     local prevH = h
                     local success = false
 
-                    for attempt = 1, 8 do
+                    for attempt = 1, 10 do
                         if not M.S.ValentineEnabled then break end
-
-                        M.Status.valentine = "Submit poging " .. attempt .. "/8..."
+                        M.Status.valentine = "Submit poging " .. attempt .. "/10... (H:" .. M.getHeartCount() .. ")"
                         M.submitHearts()
-                        task.wait(0.6)
-
+                        task.wait(0.8)
                         local newH = M.getHeartCount()
                         if newH < prevH or newH == 0 then
                             M.Status.valentineCount += 1
@@ -1457,13 +1704,12 @@ function M.startValentine()
                             success = true
                             break
                         end
-
-                        task.wait(0.4)
+                        task.wait(0.5)
                     end
 
                     if not success then
-                        M.Status.valentine = "Submit mislukt, verder collecten..."
-                        submitCooldown = tick() + 3
+                        M.Status.valentine = "Submit mislukt! Check debug. Verder collecten..."
+                        submitCooldown = tick() + 5
                     end
 
                     task.wait(0.5)
@@ -1471,14 +1717,9 @@ function M.startValentine()
                     M._valentineCollecting = true
                 end
             end)
-
-            if not ok then
-                warn("[MzD Valentine] " .. tostring(err))
-            end
-
+            if not ok then warn("[MzD Valentine] " .. tostring(err)) end
             task.wait(0.5)
         end
-
         M.Status.valentine = "Idle"
         M.valentineThread = nil
     end)
@@ -1551,10 +1792,7 @@ MF.WY = MF.WH/2
 
 local function isOwnWall(obj)
     local p = obj.Parent
-    while p do
-        if p.Name == "MzDHubWalls" then return true end
-        p = p.Parent
-    end
+    while p do if p.Name == "MzDHubWalls" then return true end p = p.Parent end
     return false
 end
 
@@ -1564,36 +1802,21 @@ local function safeDestroyFolder(parent, folderName)
     if not f then return end
     if f.Name == "MzDHubWalls" then return end
     pcall(function()
-        for _, d in pairs(f:GetDescendants()) do
-            if d:IsA("BasePart") then d:Destroy() end
-        end
+        for _, d in pairs(f:GetDescendants()) do if d:IsA("BasePart") then d:Destroy() end end
         f:Destroy()
     end)
 end
 
-local MAP_FOLDERS_REMOVE = {
-    "RightWalls","LeftWalls","Gaps","VIPWalls",
-    "SideWalls","Barriers","Fences","Walls","Decorations"
-}
-
-local EVENT_FOLDERS_REMOVE = {
-    "Walls","Decorations","Barriers","Fences","SideWalls","Blockers"
-}
-
-local EVENT_MAPS = {
-    "ValentinesMap","ArcadeMap","CandyMap",
-    "HalloweenMap","ChristmasMap","EasterMap",
-    "SummerMap","SpringMap","WinterMap"
-}
+local MAP_FOLDERS_REMOVE = {"RightWalls","LeftWalls","Gaps","VIPWalls","SideWalls","Barriers","Fences","Walls","Decorations"}
+local EVENT_FOLDERS_REMOVE = {"Walls","Decorations","Barriers","Fences","SideWalls","Blockers"}
+local EVENT_MAPS = {"ValentinesMap","ArcadeMap","CandyMap","HalloweenMap","ChristmasMap","EasterMap","SummerMap","SpringMap","WinterMap"}
 
 local function isWallPart(p)
     if not p:IsA("BasePart") then return false end
     if isOwnWall(p) then return false end
     local n = p.Name:lower()
     local keywords = {"vipwall","sidewall","barrier","fence","blocker","border"}
-    for _, k in pairs(keywords) do
-        if n == k or n:find("^"..k) then return true end
-    end
+    for _, k in pairs(keywords) do if n == k or n:find("^"..k) then return true end end
     if p.Size.Y > 15 and p.Size.Y > p.Size.X * 3 and p.Size.Y > p.Size.Z * 3 then
         if math.abs(p.Position.Z) > 60 then return true end
     end
@@ -1627,9 +1850,7 @@ function M.mapDetectXRange(map, si)
     return -15, 4385
 end
 
-function M.mapFindShared(mn)
-    return workspace:FindFirstChild(mn .. "_SharedInstances")
-end
+function M.mapFindShared(mn) return workspace:FindFirstChild(mn .. "_SharedInstances") end
 
 local function getFloorParts(map, si)
     local fl = {}
@@ -1649,8 +1870,7 @@ local function getFloorParts(map, si)
     for _, c in pairs(map:GetChildren()) do
         if c:IsA("BasePart") then
             local n = c.Name:lower()
-            if n=="firstfloor" or n=="ground" or n=="bridgefloor" or n=="floor" or
-                n=="grass" or n=="path" or n=="road" or n=="platform" then af(c) end
+            if n=="firstfloor" or n=="ground" or n=="bridgefloor" or n=="floor" or n=="grass" or n=="path" or n=="road" or n=="platform" then af(c) end
         end
     end
     for _, c in pairs(map:GetChildren()) do
@@ -1679,9 +1899,7 @@ function M.mapCleanupShared(si)
     if not si then return end
     for _, n in pairs(MAP_FOLDERS_REMOVE) do safeDestroyFolder(si, n) end
     for _, d in pairs(si:GetDescendants()) do
-        if d:IsA("BasePart") and not isOwnWall(d) and isWallPart(d) then
-            pcall(function() d:Destroy() end)
-        end
+        if d:IsA("BasePart") and not isOwnWall(d) and isWallPart(d) then pcall(function() d:Destroy() end) end
     end
 end
 
@@ -1689,9 +1907,7 @@ function M.mapCleanupMisc()
     local misc = workspace:FindFirstChild("Misc")
     if misc then
         for _, c in pairs(misc:GetChildren()) do
-            if c.Name == "BrickAddition" or c.Name == "Roof" then
-                pcall(function() c:Destroy() end)
-            end
+            if c.Name == "BrickAddition" or c.Name == "Roof" then pcall(function() c:Destroy() end) end
         end
     end
 end
@@ -1700,22 +1916,16 @@ function M.cleanupEventMaps()
     for _, mapName in pairs(EVENT_MAPS) do
         local eventMap = workspace:FindFirstChild(mapName)
         if eventMap then
-            for _, folderName in pairs(EVENT_FOLDERS_REMOVE) do
-                safeDestroyFolder(eventMap, folderName)
-            end
+            for _, folderName in pairs(EVENT_FOLDERS_REMOVE) do safeDestroyFolder(eventMap, folderName) end
             for _, d in pairs(eventMap:GetDescendants()) do
-                if d:IsA("BasePart") and not isOwnWall(d) and isWallPart(d) then
-                    pcall(function() d:Destroy() end)
-                end
+                if d:IsA("BasePart") and not isOwnWall(d) and isWallPart(d) then pcall(function() d:Destroy() end) end
             end
         end
     end
     local currentMap = M.mapFindCurrentMap()
     for _, obj in pairs(workspace:GetChildren()) do
         if obj:IsA("Model") and obj.Name:lower():find("map") and obj ~= currentMap then
-            for _, folderName in pairs(EVENT_FOLDERS_REMOVE) do
-                safeDestroyFolder(obj, folderName)
-            end
+            for _, folderName in pairs(EVENT_FOLDERS_REMOVE) do safeDestroyFolder(obj, folderName) end
         end
     end
 end
@@ -1800,8 +2010,7 @@ function M.mapBuildWalls(map, sx, ex)
         w.Anchored = true w.CanCollide = true
         w.Color = MF.BLK w.Material = Enum.Material.SmoothPlastic
         w.TopSurface = Enum.SurfaceType.Smooth w.BottomSurface = Enum.SurfaceType.Smooth
-        w.Parent = mf
-        return w
+        w.Parent = mf return w
     end
     local function ms(nm, sz, ps)
         local s = Instance.new("Part")
@@ -1819,7 +2028,7 @@ function M.mapBuildWalls(map, sx, ex)
         t.TextColor3 = MF.GLW t.TextScaled = true t.Font = Enum.Font.GothamBold t.Parent = sg
         local s2 = Instance.new("TextLabel")
         s2.Size = UDim2.new(0.6,0,0.2,0) s2.Position = UDim2.new(0.2,0,0.6,0)
-        s2.BackgroundTransparency = 1 s2.Text = "v10.4"
+        s2.BackgroundTransparency = 1 s2.Text = "v10.5"
         s2.TextColor3 = Color3.fromRGB(200,200,200) s2.TextScaled = true s2.Font = Enum.Font.Gotham s2.Parent = sg
     end
     local segs = {} local sl = 2000 local p = sx
@@ -1861,8 +2070,7 @@ function M.mapFixCollision(map, si, sx, ex)
         for _, w in pairs(mf:GetChildren()) do
             if w:IsA("BasePart") then
                 local n = w.Name
-                if not n:find("_m") and not n:find("t") and not n:find("b") and
-                    not n:find("FS") and not n:find("BS") then
+                if not n:find("_m") and not n:find("t") and not n:find("b") and not n:find("FS") and not n:find("BS") then
                     pcall(function() w.CanCollide = true w.Anchored = true end)
                 end
             end
@@ -1900,8 +2108,7 @@ function M.startMapFixer()
             M.Status.mapFixer = "Actief (" .. (M.lastMapName ~= "" and M.lastMapName or "scannen") .. ")"
             task.wait(MF.INT)
         end
-        M.Status.mapFixer = "Uit"
-        M.mapFixerThread = nil
+        M.Status.mapFixer = "Uit" M.mapFixerThread = nil
     end)
 end
 
@@ -1911,7 +2118,7 @@ function M.stopMapFixer()
     M.Status.mapFixer = "Uit"
 end
 
-print("[MzD Hub] Core v10.4 Geladen")
+print("[MzD Hub] Core v10.5 Geladen")
 
 -- ============================================
 -- GUI
@@ -1944,7 +2151,7 @@ local SPM = {["200"]=200,["400"]=400,["600"]=600,["800"]=800,["1000"]=1000,["150
 local CSPD = {"100","200","300","400","500","600","800","1000","1500","2000"}
 
 local W = Fluent:CreateWindow({
-    Title = "MzD Hub", SubTitle = "v10.4 - Escape Tsunami From Brainrot",
+    Title = "MzD Hub", SubTitle = "v10.5 - Escape Tsunami From Brainrot",
     TabWidth = 160, Size = UDim2.fromOffset(600, 500),
     Acrylic = true, Theme = "Dark", MinimizeKey = Enum.KeyCode.RightControl
 })
@@ -1999,10 +2206,7 @@ end)
 
 -- ===== FACTORY TAB =====
 local FCT = W:AddTab({Title = "Factory", Icon = "hammer"})
-FCT:AddParagraph({
-    Title = "🏭 Factory - Hoe werkt het?",
-    Content = "Maxet alle items in je backpack met de gekozen rarity/mutatie.\nElk item wordt 1x gemaxt en daarna overgeslagen.\nStopt als alles gemaxt is of geld op is.\n\n⚡ Turbo Upgrade actief: 3x sneller upgraden!"
-})
+FCT:AddParagraph({Title = "🏭 Factory", Content = "Maxet alle items in backpack.\n⚡ Turbo Upgrade: 3x sneller!"})
 FCT:AddDropdown("FactoryRarity", {Title = "Rarity", Values = FR, Default = M.S.FactoryRarity, Multi = false}):OnChanged(function(v) M.S.FactoryRarity = v end)
 FCT:AddDropdown("FactoryMutation", {Title = "Mutatie", Values = MUT, Default = M.S.FactoryMutation, Multi = false}):OnChanged(function(v) M.S.FactoryMutation = v end)
 FCT:AddDropdown("FactorySlot", {Title = "Werk Slot", Values = SL, Default = M.S.FactorySlot, Multi = false}):OnChanged(function(v) M.S.FactorySlot = v end)
@@ -2010,18 +2214,13 @@ FCT:AddSlider("FactoryMaxLevel", {Title = "Max Level", Default = M.S.FactoryMaxL
 local FCSP = FCT:AddParagraph({Title = "Status", Content = "Idle"})
 local FCTG = FCT:AddToggle("FactoryToggle", {Title = "🔁 Start Factory", Default = false})
 FCTG:OnChanged(function(v)
-    if v then
-        M.findBase() M.startFactoryLoop()
-        Fluent:Notify({Title="Factory",Content="Gestart! Turbo Upgrade actief ⚡",Duration=4})
-    else
-        M.stopFactoryLoop()
-        Fluent:Notify({Title="Factory",Content="Gestopt. #"..M.Status.factoryCount.." gemaxt.",Duration=3})
-    end
+    if v then M.findBase() M.startFactoryLoop() Fluent:Notify({Title="Factory",Content="Gestart! ⚡",Duration=4})
+    else M.stopFactoryLoop() Fluent:Notify({Title="Factory",Content="Gestopt. #"..M.Status.factoryCount,Duration=3}) end
 end)
 
 -- ===== EVENTS TAB =====
 local ET = W:AddTab({Title = "Events", Icon = "party-popper"})
-ET:AddParagraph({Title = "💝 Valentine", Content = "Inleveren zonder te bewegen naar station ✓"})
+ET:AddParagraph({Title = "💝 Valentine", Content = "Collecten + inleveren op afstand ✓\nDebug beschikbaar in Config tab"})
 local VSP = ET:AddParagraph({Title = "Status", Content = "Idle"})
 local VTG = ET:AddToggle("ValentineToggle", {Title = "💝 Valentine Farm", Default = false})
 VTG:OnChanged(function(v) if v then M.startValentine() else M.stopValentine() end end)
@@ -2045,8 +2244,7 @@ local MFSP = AT2:AddParagraph({Title = "Status", Content = "Uit"})
 local MFTG = AT2:AddToggle("MapToggle", {Title = "🗺️ Map Fixer Loop", Default = false})
 MFTG:OnChanged(function(v) if v then M.startMapFixer() else M.stopMapFixer() end end)
 AT2:AddButton({Title = "🗺️ Fix Map Eenmalig", Callback = function()
-    pcall(function() M.mapRunFix() end)
-    Fluent:Notify({Title="Map",Content="Gefixed!",Duration=3})
+    pcall(function() M.mapRunFix() end) Fluent:Notify({Title="Map",Content="Gefixed!",Duration=3})
 end})
 AT2:AddParagraph({Title = "🛡️ Bescherming", Content = ""})
 local GDTG = AT2:AddToggle("GodToggle", {Title = "🛡️ God Mode", Default = false})
@@ -2066,7 +2264,7 @@ AFKTG:OnChanged(function(v) if v then M.startAFK() else M.stopAFK() end end)
 local CT = W:AddTab({Title = "Config", Icon = "settings"})
 CT:AddDropdown("TweenSpeed", {Title = "Farm Snelheid", Values = SPD, Default = "INSTANT", Multi = false}):OnChanged(function(v) M.S.TweenSpeed = SPM[v] or 9999 end)
 CT:AddDropdown("CorridorSpeed", {
-    Title = "Corridor Snelheid", Description = "Lager = veiliger langs de muur\n⚠️ 2000+ kan je killen!",
+    Title = "Corridor Snelheid", Description = "Lager = veiliger\n⚠️ 2000+ kan je killen!",
     Values = CSPD, Default = "1500", Multi = false
 }):OnChanged(function(v) M.S.CorridorSpeed = tonumber(v) or 1500 end)
 CT:AddButton({Title = "🔄 Herlaad Brainrot Lijst", Callback = function()
@@ -2100,6 +2298,63 @@ CT:AddButton({Title = "🗑️ Leeg Werk Slot", Callback = function()
     Fluent:Notify({Title="Slot",Content="Slot "..M.S.FarmSlot.." geleegd!",Duration=3})
 end})
 CT:AddButton({Title = "🏠 Ga Naar Base", Callback = function() M.findBase() M.returnToBase() end})
+
+-- Valentine Debug Buttons
+CT:AddParagraph({Title = "💝 Valentine Debug", Content = "Gebruik deze knoppen om te zien wat er gevonden wordt"})
+CT:AddButton({Title = "🔍 Scan Valentine Remotes", Callback = function()
+    local remotes, log = M.scanValentineRemotes()
+    local info = "Gevonden: " .. #remotes .. " remotes/prompts\n"
+    info = info .. "Hearts: " .. M.getHeartCount() .. "\n\n"
+    for i, entry in pairs(remotes) do
+        if i > 15 then info = info .. "... +" .. (#remotes - 15) .. " meer\n" break end
+        info = info .. entry.type .. ": " .. entry.path .. "\n"
+    end
+    Fluent:Notify({Title="Valentine Scan",Content=info,Duration=15})
+end})
+CT:AddButton({Title = "💝 Test Submit Nu", Callback = function()
+    local prevH = M.getHeartCount()
+    local ok = M.submitHearts()
+    task.wait(1)
+    local newH = M.getHeartCount()
+    local info = "Before: " .. prevH .. " hearts\n"
+    info = info .. "After: " .. newH .. " hearts\n"
+    info = info .. "Verschil: " .. (prevH - newH) .. "\n"
+    info = info .. "Submit returned: " .. tostring(ok) .. "\n"
+    info = info .. "Remotes gebruikt: " .. #M._valentineFoundRemotes
+    Fluent:Notify({Title="Submit Test",Content=info,Duration=10})
+end})
+CT:AddButton({Title = "💝 Scan Hearts/Values", Callback = function()
+    local info = "Hearts count: " .. M.getHeartCount() .. "\n\n"
+    -- Leaderstats
+    pcall(function()
+        local ls = Player:FindFirstChild("leaderstats")
+        if ls then
+            info = info .. "Leaderstats:\n"
+            for _, v in pairs(ls:GetChildren()) do
+                info = info .. "  " .. v.Name .. " = " .. tostring(v.Value) .. "\n"
+            end
+        else
+            info = info .. "Geen leaderstats!\n"
+        end
+    end)
+    -- Attributes
+    pcall(function()
+        info = info .. "\nPlayer Attributes:\n"
+        local found = false
+        for _, attr in pairs({"Hearts","Candy","CandyGrams","Valentines","Love","CandyHearts","Money","Coins","Tokens"}) do
+            local v = Player:GetAttribute(attr)
+            if v ~= nil then
+                info = info .. "  " .. attr .. " = " .. tostring(v) .. "\n"
+                found = true
+            end
+        end
+        if not found then info = info .. "  (geen relevante)\n" end
+    end)
+    -- Cache
+    info = info .. "\nCached parts: " .. #M._valentineCachedParts
+    Fluent:Notify({Title="Valentine Values",Content=info,Duration=15})
+end})
+
 CT:AddButton({Title = "🔍 Scan Lucky Blocks", Callback = function()
     if not M.ActiveLuckyBlocks then M.ActiveLuckyBlocks = workspace:FindFirstChild("ActiveLuckyBlocks") end
     local cnt = 0 local info = ""
@@ -2198,7 +2453,8 @@ task.spawn(function()
                 "\nHome: " .. hs ..
                 "\nCoridor Z: " .. string.format("%.1f", M.getCorridorZ()) ..
                 "\nGod: " .. (M._isGod and "AAN 🛡️" or "UIT") ..
-                "\nFarm speed: INSTANT | Corridor: " .. (M.S.CorridorSpeed or 1500) .. " studs/s"
+                "\nFarm: INSTANT | Corridor: " .. (M.S.CorridorSpeed or 1500) .. " studs/s" ..
+                "\nValentine remotes: " .. #M._valentineFoundRemotes .. " | Cache: " .. #M._valentineCachedParts
             )
         end)
     end
@@ -2208,12 +2464,12 @@ end)
 task.spawn(function()
     task.wait(1) M.findBase() task.wait(0.5) M.detectWallZ()
     if M.baseGUID then
-        Fluent:Notify({Title="MzD Hub v10.4",Content="Base: "..M.baseGUID.."\nSpeed: INSTANT + Corridor "..M.S.CorridorSpeed,Duration=5})
+        Fluent:Notify({Title="MzD Hub v10.5",Content="Base: "..M.baseGUID.."\nSpeed: INSTANT + Corridor "..M.S.CorridorSpeed,Duration=5})
     else
-        Fluent:Notify({Title="MzD Hub v10.4",Content="Geladen! Klik 'Zoek Base' in Config.",Duration=5})
+        Fluent:Notify({Title="MzD Hub v10.5",Content="Geladen! Klik 'Zoek Base' in Config.",Duration=5})
     end
 end)
 
 W:SelectTab(1)
-Fluent:Notify({Title="MzD Hub v10.4",Content="Geladen ✦ RightCtrl = minimaliseer\n⚡ Speed: INSTANT + Corridor 1500",Duration=4})
-print("[MzD Hub] v10.4 VOLLEDIG GELADEN ✦")
+Fluent:Notify({Title="MzD Hub v10.5",Content="Geladen ✦ RightCtrl = minimaliseer\n⚡ INSTANT + Corridor 1500\n💝 Valentine debug in Config",Duration=5})
+print("[MzD Hub] v10.5 VOLLEDIG GELADEN ✦")
