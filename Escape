@@ -1,6 +1,6 @@
 -- ============================================
--- MzD Hub v10.3 - VOLLEDIG
--- Factory fix (Turbo Upgrade), MapFixer fix, Noclip verwijderd, Event walls fix
+-- MzD Hub v10.4 - VOLLEDIG
+-- Snellere tweens, corridor 1500 default, factory turbo, geen noclip
 -- ============================================
 getgenv().MzD = {}
 local M = getgenv().MzD
@@ -35,8 +35,8 @@ M.S = {
     SelectedBrainrots = {},
     TargetMutation = "None",
     TargetRarity = {"Common"},
-    TweenSpeed = 1000,
-    CorridorSpeed = 400,
+    TweenSpeed = 9999,
+    CorridorSpeed = 1500,
     AutoCollectMoney = false,
     InstantPickup = true,
     AntiAFK = false,
@@ -184,7 +184,7 @@ function M.mapFindCurrentMap()
     for _, c in pairs(workspace:GetChildren()) do
         if c:IsA("Model") and c.Name:find("Map") and not c.Name:find("SharedInstances") then
             if c:FindFirstChild("Spawners") or c:FindFirstChild("Gaps") or c:FindFirstChild("RightWalls") or
-               c:FindFirstChild("FirstFloor") or c:FindFirstChild("Ground") then return c end
+                c:FindFirstChild("FirstFloor") or c:FindFirstChild("Ground") then return c end
             local cnt = 0
             for _, d in pairs(c:GetDescendants()) do
                 if d:IsA("BasePart") then cnt += 1 end
@@ -264,7 +264,7 @@ function M.tweenTo(cf)
     local ch = Player.Character if not ch then return false end
     local hrp = ch:FindFirstChild("HumanoidRootPart") if not hrp then return false end
     local d = (hrp.Position - cf.Position).Magnitude
-    local t = math.max(d / M.S.TweenSpeed, 0.05)
+    local t = math.max(d / M.S.TweenSpeed, 0.01)
     local tw = TweenService:Create(hrp, TweenInfo.new(t, Enum.EasingStyle.Linear), {CFrame = cf})
     tw:Play() tw.Completed:Wait()
     return true
@@ -274,7 +274,7 @@ function M.fastTween(cf)
     local ch = Player.Character if not ch then return false end
     local hrp = ch:FindFirstChild("HumanoidRootPart") if not hrp then return false end
     local d = (hrp.Position - cf.Position).Magnitude
-    local t = math.max(d / 9999, 0.01)
+    local t = math.max(d / 99999, 0.005)
     local tw = TweenService:Create(hrp, TweenInfo.new(t, Enum.EasingStyle.Linear), {CFrame = cf})
     tw:Play() tw.Completed:Wait()
     return true
@@ -284,7 +284,7 @@ function M.corridorTween(cf)
     local ch = Player.Character if not ch then return false end
     local hrp = ch:FindFirstChild("HumanoidRootPart") if not hrp then return false end
     local d = (hrp.Position - cf.Position).Magnitude
-    local t = math.max(d / math.max(M.S.CorridorSpeed or 400, 100), 0.05)
+    local t = math.max(d / math.max(M.S.CorridorSpeed or 1500, 50), 0.01)
     local tw = TweenService:Create(hrp, TweenInfo.new(t, Enum.EasingStyle.Linear), {CFrame = cf})
     tw:Play() tw.Completed:Wait()
     return true
@@ -483,8 +483,6 @@ function M.toolMatchesRarity(tool, targetRarity, targetMutation)
 end
 
 -- ========== FACTORY TOOL ZOEKEN ==========
--- Eenvoudige match: rarity + mutatie + nog niet op maxlevel
--- Geen alreadyDone — pakt gewoon de eerste die matched, net als de standalone
 local function factoryToolMatchesRarity(tool)
     local tMut = tool:GetAttribute("Mutation") or "None"
     local lvl = tonumber(tool:GetAttribute("Level")) or 0
@@ -492,15 +490,11 @@ local function factoryToolMatchesRarity(tool)
     local toolRarity = tool:GetAttribute("Rarity")
     if not bName or bName == "" then return false end
     if lvl >= M.S.FactoryMaxLevel then return false end
-
-    -- Mutatie check
     if M.S.FactoryMutation == "None" then
         if not (tMut:lower() == "none" or tMut == "") then return false end
     elseif M.S.FactoryMutation ~= "Any" then
         if tMut ~= M.S.FactoryMutation then return false end
     end
-
-    -- Rarity check
     if M.S.FactoryRarity ~= "Any" then
         if toolRarity and toolRarity ~= "" then
             if toolRarity ~= M.S.FactoryRarity then return false end
@@ -510,20 +504,11 @@ local function factoryToolMatchesRarity(tool)
             if not wl[bName] then return false end
         end
     end
-
-    -- Geen "Locked" attribute (zoals standalone)
     if tool:GetAttribute("Locked") then return false end
-
     return true
 end
 
 -- ========== FACTORY (TURBO VERSIE) ==========
--- Exact dezelfde flow als de werkende standalone script, maar met M.* prefix.
--- 1. Tween naar slot
--- 2. Slot leegmaken indien bezet
--- 3. Eerste passende tool uit backpack pakken
--- 4. EquipTool direct → placeBrainrot → turbo upgrade → pickUpBrainrot
--- 5. Stopt als geen tool meer gevonden of geld op
 function M.startFactoryLoop()
     if M.factoryThread then return end
     M.S.FactoryEnabled = true
@@ -544,11 +529,9 @@ function M.startFactoryLoop()
 
                 local ws = tonumber(M.S.FactorySlot) or 5
 
-                -- Stap 1: Tween naar het werk-slot (zoals standalone)
                 M.tweenToSlot(ws)
                 task.wait(0.2)
 
-                -- Stap 2: Slot leegmaken als bezet
                 if not M.isSlotEmpty(ws) then
                     M.Status.factory = "Slot " .. ws .. " leegmaken..."
                     M.pickUpBrainrot(ws)
@@ -557,11 +540,9 @@ function M.startFactoryLoop()
                     task.wait(0.5)
                 end
 
-                -- Stap 3: Zoek eerste passende tool — scan meerdere keren met wachttijd
-                -- zodat hij zeker weet dat er echt niets meer is (tools kunnen vertraagd in backpack verschijnen)
                 local tool = nil
                 local scanAttempts = 0
-                local maxScanAttempts = 5  -- 5x scannen met 0.6s ertussen = ~3 seconden totaal
+                local maxScanAttempts = 5
 
                 while not tool and scanAttempts < maxScanAttempts do
                     scanAttempts += 1
@@ -576,7 +557,6 @@ function M.startFactoryLoop()
                         end
                     end
 
-                    -- Check ook character (al geequipped tool)
                     if not tool and Player.Character then
                         local eq = Player.Character:FindFirstChildWhichIsA("Tool")
                         if eq and factoryToolMatchesRarity(eq) then
@@ -584,7 +564,6 @@ function M.startFactoryLoop()
                         end
                     end
 
-                    -- Nog niet gevonden? Even wachten en opnieuw proberen
                     if not tool and scanAttempts < maxScanAttempts then
                         task.wait(0.6)
                     end
@@ -599,16 +578,13 @@ function M.startFactoryLoop()
                 local bName = tool:GetAttribute("BrainrotName") or "Item"
                 M.Status.factory = "Bezig: " .. bName
 
-                -- Stap 4: Equippen (direct, zoals standalone)
                 local hum = Player.Character and Player.Character:FindFirstChild("Humanoid")
                 if hum then hum:EquipTool(tool) task.wait(0.5) end
 
-                -- Stap 5: Plaatsen
                 M.Status.factory = "Plaatsen: " .. bName
                 M.placeBrainrot(ws)
                 task.wait(0.8)
 
-                -- Check plaatsen gelukt
                 if M.isSlotEmpty(ws) then
                     M.Status.factory = "Plaatsen mislukt, retry..."
                     pcall(function() if hum then hum:UnequipTools() end end)
@@ -616,7 +592,6 @@ function M.startFactoryLoop()
                     return
                 end
 
-                -- Stap 6: Turbo upgrade — exact zoals standalone
                 local myBase = workspace:FindFirstChild("Bases") and workspace.Bases:FindFirstChild(M.baseGUID)
                 local sm = myBase and myBase:FindFirstChild("slot " .. ws .. " brainrot")
 
@@ -625,7 +600,6 @@ function M.startFactoryLoop()
                     local fails = 0
 
                     while cur < M.S.FactoryMaxLevel and M.S.FactoryEnabled do
-                        -- 3 upgrade-calls parallel per frame
                         for i = 1, 3 do
                             task.spawn(function()
                                 M.upgradeBrainrot(ws)
@@ -650,7 +624,6 @@ function M.startFactoryLoop()
                     end
                 end
 
-                -- Stap 7: Oprapen — exact zoals standalone
                 M.Status.factory = "Oprapen: " .. bName
                 task.wait(0.5)
                 M.pickUpBrainrot(ws)
@@ -667,8 +640,6 @@ function M.startFactoryLoop()
                 M.Status.factory = "Fout! Retry..."
                 task.wait(1)
             end
-
-            -- Geen extra wait — standalone heeft ook geen extra wait aan einde van loop
         end
 
         M.Status.factory = stopReason
@@ -798,7 +769,6 @@ function M.upgradeSlotToMax(slot)
     local cur = tonumber(sm:GetAttribute("Level")) or 1
     local fails = 0
     while cur < M.S.MaxLevel and M.S.AutoUpgrade do
-        -- Turbo: 3 upgrade-calls parallel per frame
         for i = 1, 3 do
             task.spawn(function() M.upgradeBrainrot(slot) end)
         end
@@ -959,7 +929,6 @@ function M.startFarming()
                     local cur = tonumber(sm:GetAttribute("Level")) or 0
                     local fails = 0
                     while cur < M.S.MaxLevel and M.S.Farming do
-                        -- Turbo: 3 upgrade-calls parallel per frame, zelfde als factory
                         for i = 1, 3 do
                             task.spawn(function() M.upgradeBrainrot(ws) end)
                         end
@@ -1277,8 +1246,6 @@ M.setupInstant()
 -- ========== VALENTINE ==========
 function M.submitHearts()
     local submitted = false
-
-    -- Methode 1: Scan ALLE remotes in ReplicatedStorage recursief (breed net)
     pcall(function()
         local rs = game:GetService("ReplicatedStorage")
         local keywords = {
@@ -1307,14 +1274,11 @@ function M.submitHearts()
                         submitted = true
                     end
                 end
-                -- Altijd dieper zoeken, ook als naam niet matched (kan genest zitten)
                 searchRemotes(v, depth + 1)
             end
         end
         searchRemotes(rs, 0)
     end)
-
-    -- Methode 2: Net/RF packages (zoals PlotAction)
     pcall(function()
         local net = game:GetService("ReplicatedStorage"):FindFirstChild("Packages")
         if net then net = net:FindFirstChild("Net") end
@@ -1333,17 +1297,13 @@ function M.submitHearts()
             end
         end
     end)
-
-    -- Methode 3: ProximityPrompt op ALLE mogelijke station-objecten (met max distance override)
     pcall(function()
         local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
         if not hrp then return end
-
         local stationNames = {
             "CandyGramStation","HeartStation","ValentineStation",
             "SubmitStation","CollectStation","TurnInStation","ExchangeStation"
         }
-
         local function tryStation(obj)
             for _, d in pairs(obj:GetDescendants()) do
                 if d:IsA("ProximityPrompt") then
@@ -1364,8 +1324,6 @@ function M.submitHearts()
                 end
             end
         end
-
-        -- Zoek in de hele workspace naar bekende namen
         local function searchWS(parent, depth)
             if depth > 5 then return end
             for _, c in pairs(parent:GetChildren()) do
@@ -1376,7 +1334,6 @@ function M.submitHearts()
                         break
                     end
                 end
-                -- Zoek ook in event maps
                 if c:IsA("Model") or c:IsA("Folder") then
                     searchWS(c, depth + 1)
                 end
@@ -1384,8 +1341,6 @@ function M.submitHearts()
         end
         searchWS(workspace, 0)
     end)
-
-    -- Methode 4: FireAllRemotes met canvas breder - alle RemoteEvents met "candy"/"heart" in game
     pcall(function()
         for _, v in pairs(game:GetDescendants()) do
             if v:IsA("RemoteEvent") then
@@ -1398,7 +1353,6 @@ function M.submitHearts()
             end
         end
     end)
-
     return submitted
 end
 
@@ -1416,13 +1370,11 @@ function M.startValentine()
         pcall(function() M._valentineOnDescAdded(d) end)
     end)
 
-    -- Heartbeat collector: firetouchinterest op alle gecachede candy/heart parts
     M.valentineCollectorConn = RunService.Heartbeat:Connect(function()
         if not M.S.ValentineEnabled or not M._valentineCollecting then return end
         pcall(function()
             local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
             if not hrp then return end
-            -- Periodiek cache opschonen
             if tick() - M._valentineLastCacheScan > 10 then
                 local alive = {}
                 for _, p in pairs(M._valentineCachedParts) do
@@ -1440,7 +1392,6 @@ function M.startValentine()
         end)
     end)
 
-    -- Turbo thread: extra touch-fires elke frame
     M.valentineTurboThread = task.spawn(function()
         while M.S.ValentineEnabled do
             if M._valentineCollecting then
@@ -1459,7 +1410,6 @@ function M.startValentine()
         end
     end)
 
-    -- Noclip zodat je door muren kunt lopen indien nodig
     M.valentineNoclipConn = RunService.Stepped:Connect(function()
         if not M.S.ValentineEnabled then return end
         pcall(function()
@@ -1471,9 +1421,8 @@ function M.startValentine()
         end)
     end)
 
-    -- Hoofd loop
     M.valentineThread = task.spawn(function()
-        local submitCooldown = 0  -- voorkomt spam-submits
+        local submitCooldown = 0
 
         while M.S.ValentineEnabled do
             local ok, err = pcall(function()
@@ -1481,7 +1430,6 @@ function M.startValentine()
                 M.Status.valentine = "Collecten " .. h .. "/100 | #" .. M.Status.valentineCount
 
                 if h >= 100 then
-                    -- Zorg dat we niet te snel opnieuw proberen
                     if tick() - submitCooldown < 1 then
                         task.wait(0.2)
                         return
@@ -1494,7 +1442,6 @@ function M.startValentine()
                     local prevH = h
                     local success = false
 
-                    -- Probeer maximaal 8x te submitten
                     for attempt = 1, 8 do
                         if not M.S.ValentineEnabled then break end
 
@@ -1504,7 +1451,6 @@ function M.startValentine()
 
                         local newH = M.getHeartCount()
                         if newH < prevH or newH == 0 then
-                            -- Succesvol ingeleverd!
                             M.Status.valentineCount += 1
                             M.Status.valentine = "✓ Ingeleverd! (#" .. M.Status.valentineCount .. ")"
                             submitCooldown = tick()
@@ -1512,17 +1458,14 @@ function M.startValentine()
                             break
                         end
 
-                        -- Wacht iets langer tussen pogingen
                         task.wait(0.4)
                     end
 
                     if not success then
-                        -- Submit mislukt maar ga toch door (reset cooldown zodat we het blijven proberen)
                         M.Status.valentine = "Submit mislukt, verder collecten..."
-                        submitCooldown = tick() + 3  -- 3 seconden wachten voor volgende poging
+                        submitCooldown = tick() + 3
                     end
 
-                    -- Cache verversen en weer beginnen met collecten
                     task.wait(0.5)
                     M.refreshValentineCache()
                     M._valentineCollecting = true
@@ -1707,7 +1650,7 @@ local function getFloorParts(map, si)
         if c:IsA("BasePart") then
             local n = c.Name:lower()
             if n=="firstfloor" or n=="ground" or n=="bridgefloor" or n=="floor" or
-               n=="grass" or n=="path" or n=="road" or n=="platform" then af(c) end
+                n=="grass" or n=="path" or n=="road" or n=="platform" then af(c) end
         end
     end
     for _, c in pairs(map:GetChildren()) do
@@ -1876,7 +1819,7 @@ function M.mapBuildWalls(map, sx, ex)
         t.TextColor3 = MF.GLW t.TextScaled = true t.Font = Enum.Font.GothamBold t.Parent = sg
         local s2 = Instance.new("TextLabel")
         s2.Size = UDim2.new(0.6,0,0.2,0) s2.Position = UDim2.new(0.2,0,0.6,0)
-        s2.BackgroundTransparency = 1 s2.Text = "v10.3"
+        s2.BackgroundTransparency = 1 s2.Text = "v10.4"
         s2.TextColor3 = Color3.fromRGB(200,200,200) s2.TextScaled = true s2.Font = Enum.Font.Gotham s2.Parent = sg
     end
     local segs = {} local sl = 2000 local p = sx
@@ -1887,12 +1830,12 @@ function M.mapBuildWalls(map, sx, ex)
     end
     for i, s in pairs(segs) do
         local cx = s.s + s.l/2
-        local fw = mw("FrontWall_"..i, Vector3.new(s.l, MF.WH, MF.WT), Vector3.new(cx, MF.WY, MF.SZ+MF.WT/2))
+        local fw = mw("FrontWall"..i, Vector3.new(s.l, MF.WH, MF.WT), Vector3.new(cx, MF.WY, MF.SZ+MF.WT/2))
         at(fw, Enum.NormalId.Front) at(fw, Enum.NormalId.Back)
         ms("FS_t"..i, Vector3.new(s.l,1.5,0.3), Vector3.new(cx, MF.WY+MF.WH/2-0.75, MF.SZ+MF.WT+0.2))
         ms("FS_b"..i, Vector3.new(s.l,1.5,0.3), Vector3.new(cx, MF.WY-MF.WH/2+0.75, MF.SZ+MF.WT+0.2))
         ms("FS_m"..i, Vector3.new(s.l,0.5,0.3), Vector3.new(cx, MF.WY, MF.SZ+MF.WT+0.2))
-        local bw = mw("BackWall_"..i, Vector3.new(s.l, MF.WH, MF.WT), Vector3.new(cx, MF.WY, -MF.SZ-MF.WT/2))
+        local bw = mw("BackWall"..i, Vector3.new(s.l, MF.WH, MF.WT), Vector3.new(cx, MF.WY, -MF.SZ-MF.WT/2))
         at(bw, Enum.NormalId.Front) at(bw, Enum.NormalId.Back)
         ms("BS_t"..i, Vector3.new(s.l,1.5,0.3), Vector3.new(cx, MF.WY+MF.WH/2-0.75, -MF.SZ-MF.WT-0.2))
         ms("BS_b"..i, Vector3.new(s.l,1.5,0.3), Vector3.new(cx, MF.WY-MF.WH/2+0.75, -MF.SZ-MF.WT-0.2))
@@ -1918,8 +1861,8 @@ function M.mapFixCollision(map, si, sx, ex)
         for _, w in pairs(mf:GetChildren()) do
             if w:IsA("BasePart") then
                 local n = w.Name
-                if not n:find("_m") and not n:find("_t") and not n:find("_b") and
-                   not n:find("FS_") and not n:find("BS_") then
+                if not n:find("_m") and not n:find("t") and not n:find("b") and
+                    not n:find("FS") and not n:find("BS") then
                     pcall(function() w.CanCollide = true w.Anchored = true end)
                 end
             end
@@ -1968,7 +1911,7 @@ function M.stopMapFixer()
     M.Status.mapFixer = "Uit"
 end
 
-print("[MzD Hub] Core v10.3 Geladen")
+print("[MzD Hub] Core v10.4 Geladen")
 
 -- ============================================
 -- GUI
@@ -1996,12 +1939,12 @@ local FM = {"Collect","Collect, Place & Max"}
 local FR = {"Any","Common","Uncommon","Rare","Epic","Legendary","Mythical","Cosmic","Secret","Celestial","Divine","Infinity"}
 local LBR = {"Any","Common","Uncommon","Rare","Epic","Legendary","Mythical","Cosmic","Secret","Celestial","Divine","Infinity","Admin","UFO","Candy","Money"}
 local SL = {} for i = 1, 40 do table.insert(SL, tostring(i)) end
-local SPD = {"200","400","600","800","1000","1500","2000","INSTANT"}
-local SPM = {["200"]=200,["400"]=400,["600"]=600,["800"]=800,["1000"]=1000,["1500"]=1500,["2000"]=2000,["INSTANT"]=9999}
-local CSPD = {"100","200","300","400","500","600","800","1000"}
+local SPD = {"200","400","600","800","1000","1500","2000","3000","4000","INSTANT"}
+local SPM = {["200"]=200,["400"]=400,["600"]=600,["800"]=800,["1000"]=1000,["1500"]=1500,["2000"]=2000,["3000"]=3000,["4000"]=4000,["INSTANT"]=9999}
+local CSPD = {"100","200","300","400","500","600","800","1000","1500","2000"}
 
 local W = Fluent:CreateWindow({
-    Title = "MzD Hub", SubTitle = "v10.3 - Escape Tsunami From Brainrot",
+    Title = "MzD Hub", SubTitle = "v10.4 - Escape Tsunami From Brainrot",
     TabWidth = 160, Size = UDim2.fromOffset(600, 500),
     Acrylic = true, Theme = "Dark", MinimizeKey = Enum.KeyCode.RightControl
 })
@@ -2121,11 +2064,11 @@ AFKTG:OnChanged(function(v) if v then M.startAFK() else M.stopAFK() end end)
 
 -- ===== CONFIG TAB =====
 local CT = W:AddTab({Title = "Config", Icon = "settings"})
-CT:AddDropdown("TweenSpeed", {Title = "Farm Snelheid", Values = SPD, Default = "1000", Multi = false}):OnChanged(function(v) M.S.TweenSpeed = SPM[v] or 1000 end)
+CT:AddDropdown("TweenSpeed", {Title = "Farm Snelheid", Values = SPD, Default = "INSTANT", Multi = false}):OnChanged(function(v) M.S.TweenSpeed = SPM[v] or 9999 end)
 CT:AddDropdown("CorridorSpeed", {
-    Title = "Corridor Snelheid", Description = "Lager = veiliger langs de muur",
-    Values = CSPD, Default = "400", Multi = false
-}):OnChanged(function(v) M.S.CorridorSpeed = tonumber(v) or 400 end)
+    Title = "Corridor Snelheid", Description = "Lager = veiliger langs de muur\n⚠️ 2000+ kan je killen!",
+    Values = CSPD, Default = "1500", Multi = false
+}):OnChanged(function(v) M.S.CorridorSpeed = tonumber(v) or 1500 end)
 CT:AddButton({Title = "🔄 Herlaad Brainrot Lijst", Callback = function()
     M.S.SelectedBrainrots = {}
     pcall(function() BDD:SetValues(M.getBrainrotNamesMulti(M.S.TargetRarity)) BDD:SetValue({}) end)
@@ -2186,11 +2129,11 @@ CT:AddButton({Title = "🔍 Debug Brainrots", Callback = function()
             info = info..folder.Name.." ("..count.."):\n"
             local shown = 0
             for _, b in pairs(folder:GetChildren()) do
-                if shown >= 4 then info = info.."  ...\n" break end
+                if shown >= 4 then info = info.." ...\n" break end
                 local bName = b:GetAttribute("BrainrotName") or b.Name
                 local mut = b:GetAttribute("Mutation") or "None"
                 local hasRoot = M.findBrainrotRoot(b) and "✓" or "✗"
-                info = info.."  ["..hasRoot.."] "..bName
+                info = info.." ["..hasRoot.."] "..bName
                 if mut ~= "None" and mut ~= "" then info = info.." ("..mut..")" end
                 info = info.."\n" shown += 1
             end
@@ -2255,7 +2198,7 @@ task.spawn(function()
                 "\nHome: " .. hs ..
                 "\nCoridor Z: " .. string.format("%.1f", M.getCorridorZ()) ..
                 "\nGod: " .. (M._isGod and "AAN 🛡️" or "UIT") ..
-                "\nCoridor snelheid: " .. (M.S.CorridorSpeed or 400) .. " studs/s"
+                "\nFarm speed: INSTANT | Corridor: " .. (M.S.CorridorSpeed or 1500) .. " studs/s"
             )
         end)
     end
@@ -2265,12 +2208,12 @@ end)
 task.spawn(function()
     task.wait(1) M.findBase() task.wait(0.5) M.detectWallZ()
     if M.baseGUID then
-        Fluent:Notify({Title="MzD Hub v10.3",Content="Base: "..M.baseGUID.."\nCoridor Z: "..string.format("%.1f",M.getCorridorZ()),Duration=5})
+        Fluent:Notify({Title="MzD Hub v10.4",Content="Base: "..M.baseGUID.."\nSpeed: INSTANT + Corridor "..M.S.CorridorSpeed,Duration=5})
     else
-        Fluent:Notify({Title="MzD Hub v10.3",Content="Geladen! Klik 'Zoek Base' in Config.",Duration=5})
+        Fluent:Notify({Title="MzD Hub v10.4",Content="Geladen! Klik 'Zoek Base' in Config.",Duration=5})
     end
 end)
 
 W:SelectTab(1)
-Fluent:Notify({Title="MzD Hub v10.3",Content="Geladen ✦ RightCtrl = minimaliseer",Duration=4})
-print("[MzD Hub] v10.3 VOLLEDIG GELADEN ✦")
+Fluent:Notify({Title="MzD Hub v10.4",Content="Geladen ✦ RightCtrl = minimaliseer\n⚡ Speed: INSTANT + Corridor 1500",Duration=4})
+print("[MzD Hub] v10.4 VOLLEDIG GELADEN ✦")
