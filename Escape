@@ -483,54 +483,47 @@ function M.toolMatchesRarity(tool, targetRarity, targetMutation)
 end
 
 -- ========== FACTORY TOOL ZOEKEN ==========
-function M.findFactoryTool(alreadyDone)
-    local bp = Player:FindFirstChild("Backpack")
-    if not bp then return nil end
+-- Eenvoudige match: rarity + mutatie + nog niet op maxlevel
+-- Geen alreadyDone — pakt gewoon de eerste die matched, net als de standalone
+local function factoryToolMatchesRarity(tool)
+    local tMut = tool:GetAttribute("Mutation") or "None"
+    local lvl = tonumber(tool:GetAttribute("Level")) or 0
+    local bName = tool:GetAttribute("BrainrotName")
+    local toolRarity = tool:GetAttribute("Rarity")
+    if not bName or bName == "" then return false end
+    if lvl >= M.S.FactoryMaxLevel then return false end
 
-    for _, t in pairs(bp:GetChildren()) do
-        if t:IsA("Tool") then
-            local bName = t:GetAttribute("BrainrotName") or ""
-            local toolRarity = t:GetAttribute("Rarity") or ""
-            local toolMut = t:GetAttribute("Mutation") or "None"
-            local lvl = tonumber(t:GetAttribute("Level")) or 0
-            local isNone = (toolMut:lower() == "none" or toolMut == "")
+    -- Mutatie check
+    if M.S.FactoryMutation == "None" then
+        if not (tMut:lower() == "none" or tMut == "") then return false end
+    elseif M.S.FactoryMutation ~= "Any" then
+        if tMut ~= M.S.FactoryMutation then return false end
+    end
 
-            if bName == "" then continue end
-            if alreadyDone[bName] then continue end
-
-            if M.S.FactoryMutation == "None" then
-                if not isNone then continue end
-            elseif M.S.FactoryMutation ~= "Any" then
-                if toolMut ~= M.S.FactoryMutation then continue end
-            end
-
-            local rarityOk = false
-            if M.S.FactoryRarity == "Any" then
-                rarityOk = true
-            elseif toolRarity ~= "" then
-                rarityOk = (toolRarity == M.S.FactoryRarity)
-            else
-                local names = M.getBrainrotNames(M.S.FactoryRarity)
-                for _, n in pairs(names) do
-                    if n == bName then rarityOk = true break end
-                end
-            end
-            if not rarityOk then continue end
-
-            if lvl >= M.S.FactoryMaxLevel then
-                alreadyDone[bName] = true
-                continue
-            end
-
-            return t
+    -- Rarity check
+    if M.S.FactoryRarity ~= "Any" then
+        if toolRarity and toolRarity ~= "" then
+            if toolRarity ~= M.S.FactoryRarity then return false end
+        else
+            local wl = {}
+            for _, n in pairs(M.getBrainrotNames(M.S.FactoryRarity)) do wl[n] = true end
+            if not wl[bName] then return false end
         end
     end
-    return nil
+
+    -- Geen "Locked" attribute (zoals standalone)
+    if tool:GetAttribute("Locked") then return false end
+
+    return true
 end
 
 -- ========== FACTORY (TURBO VERSIE) ==========
--- FIX: Gebruikt nu turbo upgrade logica (3x parallel + task.wait() per frame)
--- en robuustere fail-detectie (~60 frames = ~1 seconde stilstand = geld op)
+-- Exact dezelfde flow als de werkende standalone script, maar met M.* prefix.
+-- 1. Tween naar slot
+-- 2. Slot leegmaken indien bezet
+-- 3. Eerste passende tool uit backpack pakken
+-- 4. EquipTool direct → placeBrainrot → turbo upgrade → pickUpBrainrot
+-- 5. Stopt als geen tool meer gevonden of geld op
 function M.startFactoryLoop()
     if M.factoryThread then return end
     M.S.FactoryEnabled = true
@@ -539,33 +532,41 @@ function M.startFactoryLoop()
 
     M.factoryThread = task.spawn(function()
         local stopReason = "Idle"
-        local alreadyDone = {}
 
         while M.S.FactoryEnabled do
             local ok, err = pcall(function()
+                M.Status.factory = "Scanning..."
                 if not M.baseGUID then M.findBase() end
                 if not M.baseGUID then
                     M.Status.factory = "Geen base gevonden!"
-                    task.wait(3) return
+                    task.wait(2) return
                 end
 
                 local ws = tonumber(M.S.FactorySlot) or 5
 
-                M.safeUnequip()
-                task.wait(0.3)
+                -- Stap 1: Tween naar het werk-slot (zoals standalone)
+                M.tweenToSlot(ws)
+                task.wait(0.2)
 
-                -- Slot leegmaken als bezet
+                -- Stap 2: Slot leegmaken als bezet
                 if not M.isSlotEmpty(ws) then
                     M.Status.factory = "Slot " .. ws .. " leegmaken..."
                     M.pickUpBrainrot(ws)
-                    task.wait(1.0)
-                    M.safeUnequip()
+                    task.wait(1)
+                    pcall(function() Player.Character.Humanoid:UnequipTools() end)
                     task.wait(0.5)
                 end
 
-                -- Zoek volgende tool
-                M.Status.factory = "Zoeken... (" .. M.S.FactoryRarity .. " / " .. M.S.FactoryMutation .. ")"
-                local tool = M.findFactoryTool(alreadyDone)
+                -- Stap 3: Zoek eerste passende tool in backpack
+                local bp = Player:FindFirstChild("Backpack")
+                if not bp then return end
+
+                local tool = nil
+                for _, t in pairs(bp:GetChildren()) do
+                    if t:IsA("Tool") and factoryToolMatchesRarity(t) then
+                        tool = t break
+                    end
+                end
 
                 if not tool then
                     stopReason = "Klaar! Alle " .. M.S.FactoryRarity .. " (" .. M.S.FactoryMutation .. ") gemaxt ✓"
@@ -573,62 +574,42 @@ function M.startFactoryLoop()
                     return
                 end
 
-                local bName = tool:GetAttribute("BrainrotName") or "?"
-                local startLvl = tonumber(tool:GetAttribute("Level")) or 0
-                M.Status.factory = "Bezig: " .. bName .. " (Lv." .. startLvl .. " → " .. M.S.FactoryMaxLevel .. ")"
+                local bName = tool:GetAttribute("BrainrotName") or "Item"
+                M.Status.factory = "Bezig: " .. bName
 
-                -- Equippen & plaatsen
-                M.safeEquip(tool)
-                task.wait(0.6)
+                -- Stap 4: Equippen (direct, zoals standalone)
+                local hum = Player.Character and Player.Character:FindFirstChild("Humanoid")
+                if hum then hum:EquipTool(tool) task.wait(0.5) end
 
+                -- Stap 5: Plaatsen
                 M.Status.factory = "Plaatsen: " .. bName
                 M.placeBrainrot(ws)
-                task.wait(1.2)
+                task.wait(0.8)
 
-                -- Retry plaatsen indien mislukt
+                -- Check plaatsen gelukt
                 if M.isSlotEmpty(ws) then
                     M.Status.factory = "Plaatsen mislukt, retry..."
-                    M.safeUnequip()
-                    task.wait(0.8)
-                    tool = M.findFactoryTool(alreadyDone)
-                    if not tool then task.wait(1) return end
-                    bName = tool:GetAttribute("BrainrotName") or "?"
-                    M.safeEquip(tool)
-                    task.wait(0.6)
-                    M.placeBrainrot(ws)
-                    task.wait(1.2)
-                    if M.isSlotEmpty(ws) then
-                        M.Status.factory = "Plaatsen 2x mislukt, skip " .. bName
-                        alreadyDone[bName] = true
-                        M.safeUnequip()
-                        task.wait(2)
-                        return
-                    end
+                    pcall(function() if hum then hum:UnequipTools() end end)
+                    task.wait(1)
+                    return
                 end
 
-                M.safeUnequip()
-                task.wait(0.3)
-
-                -- ====== TURBO UPGRADE LOGICA (FIX) ======
-                -- Stuur per frame 3 upgrade-calls parallel i.p.v. 1 met 0.05s wachttijd.
-                -- Fail threshold: ~60 frames (~1 seconde) zonder level stijging = geld op.
-                local mb = workspace:FindFirstChild("Bases") and workspace.Bases:FindFirstChild(M.baseGUID)
-                local sm = mb and mb:FindFirstChild("slot " .. ws .. " brainrot")
+                -- Stap 6: Turbo upgrade — exact zoals standalone
+                local myBase = workspace:FindFirstChild("Bases") and workspace.Bases:FindFirstChild(M.baseGUID)
+                local sm = myBase and myBase:FindFirstChild("slot " .. ws .. " brainrot")
 
                 if sm then
                     local cur = tonumber(sm:GetAttribute("Level")) or 0
                     local fails = 0
-                    local geldOp = false
 
                     while cur < M.S.FactoryMaxLevel and M.S.FactoryEnabled do
-                        -- Stuur 3 upgrade-verzoeken gelijktijdig per frame (turbo)
+                        -- 3 upgrade-calls parallel per frame
                         for i = 1, 3 do
                             task.spawn(function()
                                 M.upgradeBrainrot(ws)
                             end)
                         end
 
-                        -- Wacht 1 frame (sneller dan de oude 0.05s)
                         task.wait()
 
                         local nw = tonumber(sm:GetAttribute("Level")) or cur
@@ -638,59 +619,34 @@ function M.startFactoryLoop()
                             M.Status.factory = bName .. " Lv." .. cur .. "/" .. M.S.FactoryMaxLevel
                         else
                             fails += 1
-                            -- ~60 frames zonder voortgang = geld op (was vroeger 25 met 0.05s = ook ~1.25s)
-                            if fails >= 60 then
-                                if cur >= M.S.FactoryMaxLevel then
-                                    break
-                                end
-                                geldOp = true
+                            if fails > 60 then
+                                stopReason = "Geld op bij Lv." .. cur .. "!"
+                                M.S.FactoryEnabled = false
                                 break
                             end
                         end
                     end
-
-                    if geldOp then
-                        M.Status.factory = "Geld op bij " .. bName .. " Lv." .. cur
-                        stopReason = "Geld op bij Lv." .. cur .. "!"
-                        task.wait(0.3)
-                        M.pickUpBrainrot(ws)
-                        task.wait(1.0)
-                        M.safeUnequip()
-                        task.wait(0.3)
-                        M.S.FactoryEnabled = false
-                        return
-                    end
                 end
-                -- ====== EINDE TURBO UPGRADE ======
 
-                -- Oprapen
+                -- Stap 7: Oprapen
                 M.Status.factory = "Oprapen: " .. bName
-                task.wait(0.3)
+                task.wait(0.5)
                 M.pickUpBrainrot(ws)
-                task.wait(1.0)
-                M.safeUnequip()
+                task.wait(1.2)
+                M.Status.factoryCount += 1
+                pcall(function() if hum then hum:UnequipTools() end end)
                 task.wait(0.5)
 
-                if not M.isSlotEmpty(ws) then
-                    M.pickUpBrainrot(ws)
-                    task.wait(0.8)
-                    M.safeUnequip()
-                    task.wait(0.3)
-                end
-
-                alreadyDone[bName] = true
-                M.Status.factoryCount += 1
-                M.Status.factory = "✓ " .. bName .. " gemaxt! (#" .. M.Status.factoryCount .. ")"
-                task.wait(0.3)
+                M.Status.factory = "✓ " .. bName .. " klaar! (#" .. M.Status.factoryCount .. ")"
             end)
 
             if not ok then
                 warn("[MzD Factory] " .. tostring(err))
                 M.Status.factory = "Fout! Retry..."
-                task.wait(2)
+                task.wait(1)
             end
 
-            if M.S.FactoryEnabled then task.wait(0.3) end
+            if M.S.FactoryEnabled then task.wait(0.5) end
         end
 
         M.Status.factory = stopReason
