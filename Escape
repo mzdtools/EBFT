@@ -557,14 +557,22 @@ function M.startFactoryLoop()
                     task.wait(0.5)
                 end
 
-                -- Stap 3: Zoek eerste passende tool in backpack
+                -- Stap 3: Zoek eerste passende tool in backpack OF character (als al geequipped)
                 local bp = Player:FindFirstChild("Backpack")
                 if not bp then return end
 
                 local tool = nil
+                -- Check backpack eerst
                 for _, t in pairs(bp:GetChildren()) do
                     if t:IsA("Tool") and factoryToolMatchesRarity(t) then
                         tool = t break
+                    end
+                end
+                -- Check ook character (al geequipped tool)
+                if not tool and Player.Character then
+                    local eq = Player.Character:FindFirstChildWhichIsA("Tool")
+                    if eq and factoryToolMatchesRarity(eq) then
+                        tool = eq
                     end
                 end
 
@@ -628,7 +636,7 @@ function M.startFactoryLoop()
                     end
                 end
 
-                -- Stap 7: Oprapen
+                -- Stap 7: Oprapen — exact zoals standalone
                 M.Status.factory = "Oprapen: " .. bName
                 task.wait(0.5)
                 M.pickUpBrainrot(ws)
@@ -646,7 +654,7 @@ function M.startFactoryLoop()
                 task.wait(1)
             end
 
-            if M.S.FactoryEnabled then task.wait(0.5) end
+            -- Geen extra wait — standalone heeft ook geen extra wait aan einde van loop
         end
 
         M.Status.factory = stopReason
