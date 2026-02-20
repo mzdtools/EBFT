@@ -795,13 +795,20 @@ function M.upgradeSlotToMax(slot)
     if not mb then return end
     local sm = mb:FindFirstChild("slot " .. slot .. " brainrot")
     if not sm then return end
-    local cur = sm:GetAttribute("Level") or 1
+    local cur = tonumber(sm:GetAttribute("Level")) or 1
     local fails = 0
     while cur < M.S.MaxLevel and M.S.AutoUpgrade do
-        M.upgradeBrainrot(slot) task.wait(0.05)
-        local nw = sm:GetAttribute("Level") or cur
-        if nw > cur then fails = 0 cur = nw M.Status.upgradeCount += 1
-        else fails += 1 if fails >= 8 then break end end
+        -- Turbo: 3 upgrade-calls parallel per frame
+        for i = 1, 3 do
+            task.spawn(function() M.upgradeBrainrot(slot) end)
+        end
+        task.wait()
+        local nw = tonumber(sm:GetAttribute("Level")) or cur
+        if nw > cur then
+            fails = 0 cur = nw M.Status.upgradeCount += 1
+        else
+            fails += 1 if fails >= 60 then break end
+        end
     end
 end
 
@@ -952,11 +959,19 @@ function M.startFarming()
                     local cur = tonumber(sm:GetAttribute("Level")) or 0
                     local fails = 0
                     while cur < M.S.MaxLevel and M.S.Farming do
-                        M.upgradeBrainrot(ws) task.wait(0.05)
+                        -- Turbo: 3 upgrade-calls parallel per frame, zelfde als factory
+                        for i = 1, 3 do
+                            task.spawn(function() M.upgradeBrainrot(ws) end)
+                        end
+                        task.wait()
                         local nw = tonumber(sm:GetAttribute("Level")) or cur
-                        if nw > cur then fails = 0 cur = nw M.Status.upgradeCount += 1
+                        if nw > cur then
+                            fails = 0 cur = nw M.Status.upgradeCount += 1
                             M.Status.farm = bName .. " Lv." .. cur .. "/" .. M.S.MaxLevel
-                        else fails += 1 if fails > 20 then task.wait(1) break end end
+                        else
+                            fails += 1
+                            if fails > 60 then task.wait(1) break end
+                        end
                     end
                 end
                 M.Status.farm = bName .. " KLAAR!"
