@@ -1275,156 +1275,172 @@ end
 M.setupInstant()
 
 -- ========== VALENTINE ==========
-function M.refreshValentineCache()
-    M._valentineCachedParts = {}
-    pcall(function()
-        local function ap(p)
-            if p:IsA("BasePart") or p:IsA("MeshPart") then table.insert(M._valentineCachedParts, p) end
-        end
-        local cf = workspace:FindFirstChild("CandyEventParts")
-        if cf then for _, d in pairs(cf:GetDescendants()) do ap(d) end end
-        local vf = workspace:FindFirstChild("ValentinesCoinParts")
-        if vf then for _, d in pairs(vf:GetDescendants()) do ap(d) end end
-        for _, o in pairs(workspace:GetDescendants()) do
-            if o:IsA("BasePart") or o:IsA("MeshPart") then
-                local n = o.Name:lower()
-                local pn = o.Parent and o.Parent.Name:lower() or ""
-                if n:find("candy") or n:find("heart") or n:find("valentine") or n:find("coin") or
-                   pn:find("candy") or pn:find("heart") or pn:find("valentine") or pn:find("coin") then
-                    local a = false
-                    for _, c in pairs(M._valentineCachedParts) do if c == o then a = true break end end
-                    if not a then table.insert(M._valentineCachedParts, o) end
-                end
-            end
-        end
-    end)
-    M._valentineLastCacheScan = tick()
-end
-
-function M._valentineOnDescAdded(d)
-    if not M.S.ValentineEnabled then return end
-    if not (d:IsA("BasePart") or d:IsA("MeshPart")) then return end
-    local n = d.Name:lower()
-    local pn = d.Parent and d.Parent.Name:lower() or ""
-    if n:find("candy") or n:find("heart") or n:find("valentine") or n:find("coin") or
-       pn:find("candy") or pn:find("heart") or pn:find("valentine") or pn:find("coin") then
-        table.insert(M._valentineCachedParts, d)
-    end
-end
-
-function M.getHeartCount()
-    local found = 0
-    pcall(function()
-        local vg = Player.PlayerGui:FindFirstChild("ValentinesCandyGui")
-        if vg then
-            for _, d in pairs(vg:GetDescendants()) do
-                if d:IsA("TextLabel") then
-                    local n = tonumber(d.Text)
-                    if n and n > found then found = n end
-                    local m = string.match(d.Text, "(%d+)/%d+")
-                    if m and tonumber(m) > found then found = tonumber(m) end
-                end
-            end
-        end
-    end)
-    if found > 0 then return found end
-    pcall(function()
-        for _, d in pairs(Player.PlayerGui:GetDescendants()) do
-            if d:IsA("TextLabel") then
-                local m = string.match(d.Text, "(%d+)/100")
-                if m and tonumber(m) > found then found = tonumber(m) end
-            end
-        end
-    end)
-    return found
-end
-
 function M.submitHearts()
     local submitted = false
+
+    -- Methode 1: Scan ALLE remotes in ReplicatedStorage recursief (breed net)
     pcall(function()
         local rs = game:GetService("ReplicatedStorage")
+        local keywords = {
+            "valentine","candy","submit","heart","gram","gift",
+            "collect","turn","exchange","redeem","deliver","deposit"
+        }
         local function searchRemotes(parent, depth)
-            if depth > 6 then return end
+            if depth > 8 then return end
             for _, v in pairs(parent:GetChildren()) do
                 local n = v.Name:lower()
-                if n:find("valentine") or n:find("candy") or n:find("submit") or
-                   n:find("heart") or n:find("gram") or n:find("gift") then
+                local matched = false
+                for _, k in pairs(keywords) do
+                    if n:find(k) then matched = true break end
+                end
+                if matched then
                     if v:IsA("RemoteEvent") then
                         pcall(function() v:FireServer() end)
                         pcall(function() v:FireServer(Player.Character) end)
                         pcall(function() v:FireServer(true) end)
+                        pcall(function() v:FireServer(100) end)
                         submitted = true
                     elseif v:IsA("RemoteFunction") then
                         pcall(function() v:InvokeServer() end)
                         pcall(function() v:InvokeServer(true) end)
+                        pcall(function() v:InvokeServer(100) end)
                         submitted = true
                     end
                 end
+                -- Altijd dieper zoeken, ook als naam niet matched (kan genest zitten)
                 searchRemotes(v, depth + 1)
             end
         end
         searchRemotes(rs, 0)
     end)
+
+    -- Methode 2: Net/RF packages (zoals PlotAction)
     pcall(function()
-        local st = workspace:FindFirstChild("ValentinesMap")
-        if not st then return end
-        st = st:FindFirstChild("CandyGramStation")
-        if not st then return end
-        for _, d in pairs(st:GetDescendants()) do
-            if d:IsA("ProximityPrompt") then
-                d.MaxActivationDistance = math.huge d.HoldDuration = 0
-                task.wait(0.02)
-                pcall(function() fireproximityprompt(d) end)
-                task.wait(0.05)
-                pcall(function() fireproximityprompt(d) end)
-                submitted = true
+        local net = game:GetService("ReplicatedStorage"):FindFirstChild("Packages")
+        if net then net = net:FindFirstChild("Net") end
+        if not net then return end
+        for _, v in pairs(net:GetDescendants()) do
+            local n = v.Name:lower()
+            if n:find("candy") or n:find("heart") or n:find("valentine") or n:find("gram") then
+                if v:IsA("RemoteFunction") then
+                    pcall(function() v:InvokeServer() end)
+                    pcall(function() v:InvokeServer(true) end)
+                    submitted = true
+                elseif v:IsA("RemoteEvent") then
+                    pcall(function() v:FireServer() end)
+                    submitted = true
+                end
             end
         end
     end)
+
+    -- Methode 3: ProximityPrompt op ALLE mogelijke station-objecten (met max distance override)
     pcall(function()
         local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
         if not hrp then return end
-        local st = workspace:FindFirstChild("ValentinesMap")
-        if not st then return end
-        st = st:FindFirstChild("CandyGramStation")
-        if not st then return end
-        for _, d in pairs(st:GetDescendants()) do
-            if d:IsA("BasePart") then
-                pcall(function() firetouchinterest(hrp, d, 0) end)
-                task.wait(0.01)
-                pcall(function() firetouchinterest(hrp, d, 1) end)
-                submitted = true
+
+        local stationNames = {
+            "CandyGramStation","HeartStation","ValentineStation",
+            "SubmitStation","CollectStation","TurnInStation","ExchangeStation"
+        }
+
+        local function tryStation(obj)
+            for _, d in pairs(obj:GetDescendants()) do
+                if d:IsA("ProximityPrompt") then
+                    pcall(function()
+                        d.MaxActivationDistance = math.huge
+                        d.HoldDuration = 0
+                        task.wait(0.02)
+                        fireproximityprompt(d)
+                        task.wait(0.05)
+                        fireproximityprompt(d)
+                    end)
+                    submitted = true
+                end
+                if d:IsA("BasePart") then
+                    pcall(function() firetouchinterest(hrp, d, 0) end)
+                    task.wait(0.01)
+                    pcall(function() firetouchinterest(hrp, d, 1) end)
+                end
+            end
+        end
+
+        -- Zoek in de hele workspace naar bekende namen
+        local function searchWS(parent, depth)
+            if depth > 5 then return end
+            for _, c in pairs(parent:GetChildren()) do
+                local n = c.Name
+                for _, sn in pairs(stationNames) do
+                    if n == sn or n:lower():find("station") or n:lower():find("gram") then
+                        tryStation(c)
+                        break
+                    end
+                end
+                -- Zoek ook in event maps
+                if c:IsA("Model") or c:IsA("Folder") then
+                    searchWS(c, depth + 1)
+                end
+            end
+        end
+        searchWS(workspace, 0)
+    end)
+
+    -- Methode 4: FireAllRemotes met canvas breder - alle RemoteEvents met "candy"/"heart" in game
+    pcall(function()
+        for _, v in pairs(game:GetDescendants()) do
+            if v:IsA("RemoteEvent") then
+                local n = v.Name:lower()
+                if n:find("candy") or n:find("heart") or n:find("valentine") or n:find("gram") then
+                    pcall(function() v:FireServer() end)
+                    pcall(function() v:FireServer(true) end)
+                    submitted = true
+                end
             end
         end
     end)
+
     return submitted
 end
 
 function M.startValentine()
     if M.valentineThread then return end
-    M.S.ValentineEnabled = true M.Status.valentineCount = 0 M._valentineCollecting = true
+    M.S.ValentineEnabled = true
+    M.Status.valentineCount = 0
+    M._valentineCollecting = true
     M.refreshValentineCache()
-    if M._valentineDescAddedConn then pcall(function() M._valentineDescAddedConn:Disconnect() end) end
+
+    if M._valentineDescAddedConn then
+        pcall(function() M._valentineDescAddedConn:Disconnect() end)
+    end
     M._valentineDescAddedConn = workspace.DescendantAdded:Connect(function(d)
         pcall(function() M._valentineOnDescAdded(d) end)
     end)
+
+    -- Heartbeat collector: firetouchinterest op alle gecachede candy/heart parts
     M.valentineCollectorConn = RunService.Heartbeat:Connect(function()
         if not M.S.ValentineEnabled or not M._valentineCollecting then return end
         pcall(function()
             local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
             if not hrp then return end
+            -- Periodiek cache opschonen
             if tick() - M._valentineLastCacheScan > 10 then
                 local alive = {}
                 for _, p in pairs(M._valentineCachedParts) do
                     if p and p.Parent then table.insert(alive, p) end
                 end
-                M._valentineCachedParts = alive M._valentineLastCacheScan = tick()
+                M._valentineCachedParts = alive
+                M._valentineLastCacheScan = tick()
             end
             for _, p in pairs(M._valentineCachedParts) do
-                if p and p.Parent then firetouchinterest(hrp, p, 0) firetouchinterest(hrp, p, 1) end
+                if p and p.Parent then
+                    firetouchinterest(hrp, p, 0)
+                    firetouchinterest(hrp, p, 1)
+                end
             end
         end)
     end)
+
+    -- Turbo thread: extra touch-fires elke frame
     M.valentineTurboThread = task.spawn(function()
         while M.S.ValentineEnabled do
             if M._valentineCollecting then
@@ -1432,13 +1448,18 @@ function M.startValentine()
                     local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
                     if not hrp then return end
                     for _, p in pairs(M._valentineCachedParts) do
-                        if p and p.Parent then firetouchinterest(hrp, p, 0) firetouchinterest(hrp, p, 1) end
+                        if p and p.Parent then
+                            firetouchinterest(hrp, p, 0)
+                            firetouchinterest(hrp, p, 1)
+                        end
                     end
                 end)
             end
             task.wait()
         end
     end)
+
+    -- Noclip zodat je door muren kunt lopen indien nodig
     M.valentineNoclipConn = RunService.Stepped:Connect(function()
         if not M.S.ValentineEnabled then return end
         pcall(function()
@@ -1449,32 +1470,74 @@ function M.startValentine()
             end
         end)
     end)
+
+    -- Hoofd loop
     M.valentineThread = task.spawn(function()
+        local submitCooldown = 0  -- voorkomt spam-submits
+
         while M.S.ValentineEnabled do
-            local h = M.getHeartCount()
-            M.Status.valentine = "Collecten " .. h .. "/100"
-            if h >= 100 then
-                M.Status.valentine = "Inleveren..."
-                M._valentineCollecting = false
-                task.wait(0.3)
-                local prevH = h
-                for attempt = 1, 5 do
-                    M.submitHearts() task.wait(0.4)
-                    local newH = M.getHeartCount()
-                    if newH < prevH then
-                        M.Status.valentineCount += 1
-                        M.Status.valentine = "Ingeleverd! (#" .. M.Status.valentineCount .. ")"
-                        break
+            local ok, err = pcall(function()
+                local h = M.getHeartCount()
+                M.Status.valentine = "Collecten " .. h .. "/100 | #" .. M.Status.valentineCount
+
+                if h >= 100 then
+                    -- Zorg dat we niet te snel opnieuw proberen
+                    if tick() - submitCooldown < 1 then
+                        task.wait(0.2)
+                        return
                     end
-                    if attempt == 5 then M.Status.valentine = "Submit mislukt..." end
+
+                    M.Status.valentine = "Inleveren... (" .. h .. " harten)"
+                    M._valentineCollecting = false
+                    task.wait(0.3)
+
+                    local prevH = h
+                    local success = false
+
+                    -- Probeer maximaal 8x te submitten
+                    for attempt = 1, 8 do
+                        if not M.S.ValentineEnabled then break end
+
+                        M.Status.valentine = "Submit poging " .. attempt .. "/8..."
+                        M.submitHearts()
+                        task.wait(0.6)
+
+                        local newH = M.getHeartCount()
+                        if newH < prevH or newH == 0 then
+                            -- Succesvol ingeleverd!
+                            M.Status.valentineCount += 1
+                            M.Status.valentine = "✓ Ingeleverd! (#" .. M.Status.valentineCount .. ")"
+                            submitCooldown = tick()
+                            success = true
+                            break
+                        end
+
+                        -- Wacht iets langer tussen pogingen
+                        task.wait(0.4)
+                    end
+
+                    if not success then
+                        -- Submit mislukt maar ga toch door (reset cooldown zodat we het blijven proberen)
+                        M.Status.valentine = "Submit mislukt, verder collecten..."
+                        submitCooldown = tick() + 3  -- 3 seconden wachten voor volgende poging
+                    end
+
+                    -- Cache verversen en weer beginnen met collecten
+                    task.wait(0.5)
+                    M.refreshValentineCache()
+                    M._valentineCollecting = true
                 end
-                task.wait(0.5)
-                M._valentineCollecting = true
-                M.refreshValentineCache()
+            end)
+
+            if not ok then
+                warn("[MzD Valentine] " .. tostring(err))
             end
+
             task.wait(0.5)
         end
-        M.Status.valentine = "Idle" M.valentineThread = nil
+
+        M.Status.valentine = "Idle"
+        M.valentineThread = nil
     end)
 end
 
