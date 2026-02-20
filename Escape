@@ -557,22 +557,36 @@ function M.startFactoryLoop()
                     task.wait(0.5)
                 end
 
-                -- Stap 3: Zoek eerste passende tool in backpack OF character (als al geequipped)
-                local bp = Player:FindFirstChild("Backpack")
-                if not bp then return end
-
+                -- Stap 3: Zoek eerste passende tool — scan meerdere keren met wachttijd
+                -- zodat hij zeker weet dat er echt niets meer is (tools kunnen vertraagd in backpack verschijnen)
                 local tool = nil
-                -- Check backpack eerst
-                for _, t in pairs(bp:GetChildren()) do
-                    if t:IsA("Tool") and factoryToolMatchesRarity(t) then
-                        tool = t break
+                local scanAttempts = 0
+                local maxScanAttempts = 5  -- 5x scannen met 0.6s ertussen = ~3 seconden totaal
+
+                while not tool and scanAttempts < maxScanAttempts do
+                    scanAttempts += 1
+                    M.Status.factory = "Scannen backpack... (" .. scanAttempts .. "/" .. maxScanAttempts .. ")"
+
+                    local bp = Player:FindFirstChild("Backpack")
+                    if bp then
+                        for _, t in pairs(bp:GetChildren()) do
+                            if t:IsA("Tool") and factoryToolMatchesRarity(t) then
+                                tool = t break
+                            end
+                        end
                     end
-                end
-                -- Check ook character (al geequipped tool)
-                if not tool and Player.Character then
-                    local eq = Player.Character:FindFirstChildWhichIsA("Tool")
-                    if eq and factoryToolMatchesRarity(eq) then
-                        tool = eq
+
+                    -- Check ook character (al geequipped tool)
+                    if not tool and Player.Character then
+                        local eq = Player.Character:FindFirstChildWhichIsA("Tool")
+                        if eq and factoryToolMatchesRarity(eq) then
+                            tool = eq
+                        end
+                    end
+
+                    -- Nog niet gevonden? Even wachten en opnieuw proberen
+                    if not tool and scanAttempts < maxScanAttempts then
+                        task.wait(0.6)
                     end
                 end
 
