@@ -1,8 +1,8 @@
 -- ============================================
--- MzD Hub v10.6 - VOLLEDIG
--- Valentine fix, submit debug, snelle tweens
--- + God Mode v17 DIKKE VLOER geïntegreerd
--- Load: loadstring(game:HttpGet("https://raw.githubusercontent.com/mzdtools/EBFT/main/Escape"))()
+-- MzD Hub v10.7 - VOLLEDIG
+-- God Mode v18: Vervangende Vloer methode
+-- Kill zone op Y≈0, wij lopen op Y≈-17
+-- loadstring(game:HttpGet("https://raw.githubusercontent.com/mzdtools/EBFT/main/Escape"))()
 -- ============================================
 getgenv().MzD = {}
 local M = getgenv().MzD
@@ -59,9 +59,8 @@ M.S = {
     LuckyBlockRarity = {"Common"},
     LuckyBlockMutation = "Any",
     GodEnabled = false,
-    -- God Mode v17 instellingen
-    GodFloorThickness = 500,  -- hoe dik de vloer wordt
-    GodMode = "Dikke Vloer",  -- "Dikke Vloer" of "Oud"
+    GodFloorY = -20,
+    GodWalkY = -17,
 }
 
 M.Status = {
@@ -104,14 +103,14 @@ M._valentineFoundRemotes = {}
 M._valentineDebugLog = {}
 M.luckyBlockThread = nil
 
--- God Mode v17 state
+-- God Mode v18 state
 M._isGod = false
 M._godNoclipThread = nil
 M._godHealthConn = nil
 M._godDiedConn = nil
-M._godOriginalFloors = {}  -- sla originele vloer data op voor herstel
-M._godWalkY = nil          -- Y hoogte om onder vloer te lopen
-M._godFloorThickness = 500 -- vloerdikte
+M._godOriginalFloors = {}
+M._godCreatedFloors = {}
+M._godKillParts = {}
 
 M._wallZ_front = 173
 M._wallZ_back = -173
@@ -119,7 +118,7 @@ M._wallZ_back = -173
 local HIGH_RARITIES = {["Celestial"] = true, ["Divine"] = true, ["Infinity"] = true}
 
 -- ============================================
--- GOD MODE v17 - DIKKE VLOER
+-- GOD MODE v18 - VERVANGENDE VLOER
 -- ============================================
 
 local function godFindFloorParts()
@@ -137,7 +136,7 @@ local function godFindFloorParts()
 
     local function checkPart(p)
         if not p:IsA("BasePart") then return end
-        if p.Size.X > 20 and p.Size.Z > 5 and p.Size.Y < 20 then
+        if p.Size.X > 15 and p.Size.Z > 5 and p.Size.Y < 20 then
             if p.Position.Y > -10 and p.Position.Y < 30 then
                 table.insert(floors, p)
             end
@@ -149,7 +148,8 @@ local function godFindFloorParts()
             if c:IsA("BasePart") then
                 local n = c.Name:lower()
                 if n == "firstfloor" or n == "ground" or n == "floor" or
-                   n == "grass" or n == "path" or n == "road" or n == "platform" then
+                   n == "grass" or n == "path" or n == "road" or n == "platform" or
+                   n == "bridgefloor" then
                     table.insert(floors, c)
                 else
                     checkPart(c)
@@ -160,7 +160,6 @@ local function godFindFloorParts()
         if sp then for _, s in pairs(sp:GetChildren()) do checkPart(s) end end
     end
 
-    -- SharedInstances vloeren
     for _, c in pairs(workspace:GetChildren()) do
         if c.Name:find("SharedInstances") then
             local fl = c:FindFirstChild("Floors")
@@ -169,70 +168,171 @@ local function godFindFloorParts()
         end
     end
 
-    -- Fallback
     if #floors == 0 then
         for _, c in pairs(workspace:GetChildren()) do
             if c:IsA("BasePart") then checkPart(c) end
         end
     end
 
-    return floors
+    return floors, map
 end
 
-local function godMakeFloorThick()
-    local floors = godFindFloorParts()
+local function godFindKillParts()
+    local kills = {}
+    for _, c in pairs(workspace:GetDescendants()) do
+        if c:IsA("BasePart") then
+            -- Kill zone: size 1, 0.05, 260 op Y≈0
+            if c.Size.Y < 0.5 and c.Size.Z > 100 and c.Position.Y < 2 and c.Position.Y > -2 then
+                table.insert(kills, c)
+            end
+            -- Ook zoeken op naam
+            local n = c.Name:lower()
+            if n:find("kill") or n:find("tsunami") or n:find("death") or n:find("damage") then
+                table.insert(kills, c)
+            end
+        end
+    end
+    return kills
+end
+
+local function godDisableKillParts()
+    M._godKillParts = {}
+    local kills = godFindKillParts()
+    for _, p in pairs(kills) do
+        table.insert(M._godKillParts, {
+            part = p,
+            canCollide = p.CanCollide,
+            canTouch = p.CanTouch,
+            size = p.Size,
+            position = p.Position,
+            transparency = p.Transparency,
+        })
+        pcall(function()
+            p.CanCollide = false
+            p.CanTouch = false
+            p.Size = Vector3.new(0, 0, 0)
+            p.Transparency = 1
+            p.Position = Vector3.new(0, -9999, 0)
+        end)
+    end
+    print("[MzD God] Kill parts uitgeschakeld: " .. #kills)
+end
+
+local function godRestoreKillParts()
+    for _, data in pairs(M._godKillParts) do
+        pcall(function()
+            if data.part and data.part.Parent then
+                data.part.CanCollide = data.canCollide
+                data.part.CanTouch = data.canTouch
+                data.part.Size = data.size
+                data.part.Position = data.position
+                data.part.Transparency = data.transparency
+            end
+        end)
+    end
+    M._godKillParts = {}
+end
+
+local function godReplaceFloors()
+    local floors, map = godFindFloorParts()
     if #floors == 0 then
         M.Status.god = "Geen vloer gevonden!"
         return false
     end
 
     M._godOriginalFloors = {}
-    local minFloorY = math.huge
+    M._godCreatedFloors = {}
+
+    local floorY = M.S.GodFloorY
+    local floorThickness = 4
 
     for _, p in pairs(floors) do
+        -- Sla origineel op
         table.insert(M._godOriginalFloors, {
             part = p,
             size = p.Size,
             position = p.Position,
-            canCollide = p.CanCollide
+            canCollide = p.CanCollide,
+            transparency = p.Transparency,
+            color = p.Color,
+            material = p.Material,
+            anchored = p.Anchored,
         })
 
-        local topY = p.Position.Y + p.Size.Y / 2
-        if topY < minFloorY then minFloorY = topY end
-
+        -- Maak nieuwe vloer op lagere Y
         pcall(function()
-            local newSizeY = p.Size.Y + M._godFloorThickness
-            local newPosY = topY - newSizeY / 2
-            p.Size = Vector3.new(p.Size.X, newSizeY, p.Size.Z)
-            p.Position = Vector3.new(p.Position.X, newPosY, p.Position.Z)
-            p.CanCollide = true
-            p.Anchored = true
+            local newFloor = Instance.new("Part")
+            newFloor.Name = "MzDGodFloor"
+            newFloor.Size = Vector3.new(p.Size.X + 10, floorThickness, p.Size.Z + 10)
+            newFloor.Position = Vector3.new(p.Position.X, floorY, p.Position.Z)
+            newFloor.Anchored = true
+            newFloor.CanCollide = true
+            newFloor.Color = p.Color
+            newFloor.Material = p.Material
+            newFloor.Transparency = 0.3
+            newFloor.TopSurface = Enum.SurfaceType.Smooth
+            newFloor.BottomSurface = Enum.SurfaceType.Smooth
+            newFloor.Parent = workspace
+
+            table.insert(M._godCreatedFloors, newFloor)
+        end)
+
+        -- Maak originele vloer onzichtbaar en niet-collision
+        pcall(function()
+            p.CanCollide = false
+            p.Transparency = 1
         end)
     end
 
-    -- Loopruimte net onder de vloer oppervlak
-    M._godWalkY = minFloorY - 5
+    -- Extra: grote vangvloer voor het geval
+    pcall(function()
+        local catchFloor = Instance.new("Part")
+        catchFloor.Name = "MzDGodCatchFloor"
+        catchFloor.Size = Vector3.new(10000, 2, 10000)
+        catchFloor.Position = Vector3.new(0, floorY - 5, 0)
+        catchFloor.Anchored = true
+        catchFloor.CanCollide = true
+        catchFloor.Transparency = 1
+        catchFloor.Color = Color3.fromRGB(50, 50, 50)
+        catchFloor.Parent = workspace
+        table.insert(M._godCreatedFloors, catchFloor)
+    end)
+
+    print("[MzD God] Vloeren vervangen: " .. #floors .. " → Y=" .. floorY)
     return true
 end
 
-local function godRestoreFloor()
+local function godRestoreFloors()
+    -- Herstel originele vloeren
     for _, data in pairs(M._godOriginalFloors) do
         pcall(function()
             if data.part and data.part.Parent then
                 data.part.Size = data.size
                 data.part.Position = data.position
                 data.part.CanCollide = data.canCollide
+                data.part.Transparency = data.transparency
+                data.part.Color = data.color
+                data.part.Material = data.material
+                data.part.Anchored = data.anchored
             end
         end)
     end
     M._godOriginalFloors = {}
-    M._godWalkY = nil
+
+    -- Verwijder gemaakte vloeren
+    for _, f in pairs(M._godCreatedFloors) do
+        pcall(function()
+            if f and f.Parent then f:Destroy() end
+        end)
+    end
+    M._godCreatedFloors = {}
 end
 
-local function godGoUnderFloor()
+local function godTeleportUnder()
     local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
-    if not hrp or not M._godWalkY then return end
-    hrp.CFrame = CFrame.new(hrp.Position.X, M._godWalkY, hrp.Position.Z)
+    if not hrp then return end
+    hrp.Velocity = Vector3.new(0, 0, 0)
+    hrp.CFrame = CFrame.new(hrp.Position.X, M.S.GodWalkY, hrp.Position.Z)
 end
 
 local function godStartNoclip()
@@ -241,15 +341,54 @@ local function godStartNoclip()
         while M._isGod do
             pcall(function()
                 local ch = Player.Character
-                if ch then
-                    for _, p in pairs(ch:GetDescendants()) do
-                        if p:IsA("BasePart") then
-                            p.CanCollide = false
-                        end
+                if not ch then return end
+                local hrp = ch:FindFirstChild("HumanoidRootPart")
+
+                -- Character noclip door originele vloer (die nu onzichtbaar is)
+                for _, p in pairs(ch:GetDescendants()) do
+                    if p:IsA("BasePart") then
+                        p.CanCollide = false
                     end
                 end
+
+                -- Houd speler op juiste Y-hoogte
+                if hrp then
+                    local curY = hrp.Position.Y
+                    local targetY = M.S.GodWalkY
+
+                    -- Als te ver van target Y, corrigeer
+                    if curY > targetY + 8 then
+                        -- Speler is te hoog (boven originele vloer)
+                        hrp.Velocity = Vector3.new(hrp.Velocity.X, -5, hrp.Velocity.Z)
+                        hrp.CFrame = CFrame.new(hrp.Position.X, targetY, hrp.Position.Z)
+                    elseif curY < targetY - 30 then
+                        -- Speler is te ver gevallen
+                        hrp.Velocity = Vector3.new(0, 0, 0)
+                        hrp.CFrame = CFrame.new(hrp.Position.X, targetY, hrp.Position.Z)
+                    end
+                end
+
+                -- Houd kill parts uitgeschakeld
+                for _, data in pairs(M._godKillParts) do
+                    pcall(function()
+                        if data.part and data.part.Parent then
+                            data.part.CanCollide = false
+                            data.part.CanTouch = false
+                        end
+                    end)
+                end
+
+                -- Houd originele vloeren onzichtbaar
+                for _, data in pairs(M._godOriginalFloors) do
+                    pcall(function()
+                        if data.part and data.part.Parent then
+                            data.part.CanCollide = false
+                            data.part.Transparency = 1
+                        end
+                    end)
+                end
             end)
-            task.wait(0.05)
+            task.wait(0.03)
         end
     end)
 end
@@ -267,7 +406,6 @@ local function godSetupHealth(char)
         hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
     end)
 
-    -- ForceField
     for _, ff in pairs(char:GetChildren()) do
         if ff:IsA("ForceField") then ff:Destroy() end
     end
@@ -302,43 +440,51 @@ function M.enableGod()
     M.S.GodEnabled = true
     M.Status.god = "Starten..."
 
-    if M.S.GodMode == "Dikke Vloer" then
-        -- v17: Dikke vloer methode
-        local ok = godMakeFloorThick()
-        if ok then
-            task.wait(0.2)
-            godGoUnderFloor()
-            godStartNoclip()
-            if Player.Character then godSetupHealth(Player.Character) end
-            M.Status.god = "Aan 🛡️ (Dikke Vloer, Y=" .. math.floor(M._godWalkY or 0) .. ")"
-        else
-            -- Fallback naar oud systeem als vloer niet gevonden
-            M.Status.god = "Aan 🛡️ (Fallback)"
-            godStartNoclip()
-            if Player.Character then godSetupHealth(Player.Character) end
-        end
+    -- Stap 1: Kill parts uitschakelen
+    godDisableKillParts()
+    task.wait(0.1)
+
+    -- Stap 2: Vloeren vervangen
+    local ok = godReplaceFloors()
+    task.wait(0.2)
+
+    -- Stap 3: Noclip starten (VOOR teleport)
+    godStartNoclip()
+    task.wait(0.2)
+
+    -- Stap 4: Teleport onder de vloer
+    godTeleportUnder()
+    task.wait(0.2)
+
+    -- Stap 5: Health bescherming
+    if Player.Character then godSetupHealth(Player.Character) end
+
+    if ok then
+        M.Status.god = "Aan 🛡️ (Onder Vloer Y=" .. M.S.GodWalkY .. ")"
     else
-        -- Oud god mode systeem (health restore only)
-        godStartNoclip()
-        if Player.Character then godSetupHealth(Player.Character) end
-        M.Status.god = "Aan 🛡️ (Oud)"
+        M.Status.god = "Aan 🛡️ (Fallback - geen vloer gevonden)"
     end
+
+    print("[MzD God] ACTIEF! WalkY=" .. M.S.GodWalkY .. " FloorY=" .. M.S.GodFloorY)
 end
 
 function M.disableGod()
     M._isGod = false
     M.S.GodEnabled = false
 
+    -- Stop noclip
     if M._godNoclipThread then pcall(task.cancel, M._godNoclipThread) M._godNoclipThread = nil end
     if M._godHealthConn then pcall(function() M._godHealthConn:Disconnect() end) M._godHealthConn = nil end
     if M._godDiedConn then pcall(function() M._godDiedConn:Disconnect() end) M._godDiedConn = nil end
 
-    -- Herstel vloer
-    godRestoreFloor()
+    -- Herstel alles
+    godRestoreFloors()
+    godRestoreKillParts()
 
     -- Zet character terug boven vloer
     local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
     if hrp then
+        hrp.Velocity = Vector3.new(0, 0, 0)
         hrp.CFrame = CFrame.new(hrp.Position.X, 10, hrp.Position.Z)
     end
 
@@ -350,8 +496,8 @@ function M.disableGod()
                 pcall(function() p.CanCollide = true end)
             end
         end
-        for _, ff in pairs(ch:GetChildren()) do
-            if ff:IsA("ForceField") then ff:Destroy() end
+        for _, ff2 in pairs(ch:GetChildren()) do
+            if ff2:IsA("ForceField") then ff2:Destroy() end
         end
         local hum = ch:FindFirstChild("Humanoid")
         if hum then
@@ -364,6 +510,7 @@ function M.disableGod()
     end
 
     M.Status.god = "Uit"
+    print("[MzD God] Uitgeschakeld, alles hersteld")
 end
 
 -- ========== EQUIP ==========
@@ -459,17 +606,15 @@ Player.CharacterAdded:Connect(function(character)
     task.wait(0.5)
     M.detectWallZ()
     if M._isGod then
-        -- Herstart god mode na respawn
         if M._godHealthConn then pcall(function() M._godHealthConn:Disconnect() end) M._godHealthConn = nil end
         if M._godDiedConn then pcall(function() M._godDiedConn:Disconnect() end) M._godDiedConn = nil end
         task.wait(0.5)
         godSetupHealth(character)
-        if M.S.GodMode == "Dikke Vloer" then
-            -- Vloer was al dik gemaakt, alleen under floor teleport
-            task.wait(0.5)
-            godGoUnderFloor()
-        end
-        M.Status.god = "Respawn ✓"
+        -- Kill parts opnieuw uitschakelen na respawn
+        godDisableKillParts()
+        task.wait(0.3)
+        godTeleportUnder()
+        M.Status.god = "Respawn ✓ (Y=" .. M.S.GodWalkY .. ")"
     end
 end)
 
@@ -477,9 +622,16 @@ end)
 function M.tweenTo(cf)
     local ch = Player.Character if not ch then return false end
     local hrp = ch:FindFirstChild("HumanoidRootPart") if not hrp then return false end
-    local d = (hrp.Position - cf.Position).Magnitude
+
+    -- Als god mode aan, tween op god Y-hoogte
+    local targetCF = cf
+    if M._isGod then
+        targetCF = CFrame.new(cf.Position.X, M.S.GodWalkY, cf.Position.Z)
+    end
+
+    local d = (hrp.Position - targetCF.Position).Magnitude
     local t = math.max(d / M.S.TweenSpeed, 0.01)
-    local tw = TweenService:Create(hrp, TweenInfo.new(t, Enum.EasingStyle.Linear), {CFrame = cf})
+    local tw = TweenService:Create(hrp, TweenInfo.new(t, Enum.EasingStyle.Linear), {CFrame = targetCF})
     tw:Play() tw.Completed:Wait()
     return true
 end
@@ -487,9 +639,15 @@ end
 function M.fastTween(cf)
     local ch = Player.Character if not ch then return false end
     local hrp = ch:FindFirstChild("HumanoidRootPart") if not hrp then return false end
-    local d = (hrp.Position - cf.Position).Magnitude
+
+    local targetCF = cf
+    if M._isGod then
+        targetCF = CFrame.new(cf.Position.X, M.S.GodWalkY, cf.Position.Z)
+    end
+
+    local d = (hrp.Position - targetCF.Position).Magnitude
     local t = math.max(d / 99999, 0.005)
-    local tw = TweenService:Create(hrp, TweenInfo.new(t, Enum.EasingStyle.Linear), {CFrame = cf})
+    local tw = TweenService:Create(hrp, TweenInfo.new(t, Enum.EasingStyle.Linear), {CFrame = targetCF})
     tw:Play() tw.Completed:Wait()
     return true
 end
@@ -497,9 +655,15 @@ end
 function M.corridorTween(cf)
     local ch = Player.Character if not ch then return false end
     local hrp = ch:FindFirstChild("HumanoidRootPart") if not hrp then return false end
-    local d = (hrp.Position - cf.Position).Magnitude
+
+    local targetCF = cf
+    if M._isGod then
+        targetCF = CFrame.new(cf.Position.X, M.S.GodWalkY, cf.Position.Z)
+    end
+
+    local d = (hrp.Position - targetCF.Position).Magnitude
     local t = math.max(d / math.max(M.S.CorridorSpeed or 1500, 50), 0.01)
-    local tw = TweenService:Create(hrp, TweenInfo.new(t, Enum.EasingStyle.Linear), {CFrame = cf})
+    local tw = TweenService:Create(hrp, TweenInfo.new(t, Enum.EasingStyle.Linear), {CFrame = targetCF})
     tw:Play() tw.Completed:Wait()
     return true
 end
@@ -511,12 +675,16 @@ function M.safePathTo(targetCFrame)
     local startPos = hrp.Position
     local endPos = targetCFrame.Position
     local SAFE_Z = M.getCorridorZ()
-    local SAFE_Y = M.getHomePosition().Position.Y + 8
+    local SAFE_Y = M._isGod and M.S.GodWalkY or (M.getHomePosition().Position.Y + 8)
+
     M.fastTween(CFrame.new(startPos.X, SAFE_Y, startPos.Z)) task.wait(0.05)
     M.corridorTween(CFrame.new(startPos.X, SAFE_Y, SAFE_Z)) task.wait(0.05)
     M.corridorTween(CFrame.new(endPos.X, SAFE_Y, SAFE_Z)) task.wait(0.05)
     M.corridorTween(CFrame.new(endPos.X, SAFE_Y, endPos.Z)) task.wait(0.05)
-    M.tweenTo(targetCFrame) task.wait(0.05)
+
+    -- Voor brainrot pakken: ga naar de juiste positie (ook op god Y)
+    local finalCF = M._isGod and CFrame.new(endPos.X, M.S.GodWalkY, endPos.Z) or targetCFrame
+    M.tweenTo(finalCF) task.wait(0.05)
     return true
 end
 
@@ -527,16 +695,22 @@ function M.safeReturnToBase()
     local homePos = M.getHomePosition().Position
     M.detectWallZ()
     local SAFE_Z = M.getCorridorZ()
-    local SAFE_Y = homePos.Y + 8
+    local SAFE_Y = M._isGod and M.S.GodWalkY or (homePos.Y + 8)
+
     M.fastTween(CFrame.new(curPos.X, SAFE_Y, curPos.Z)) task.wait(0.05)
     M.corridorTween(CFrame.new(curPos.X, SAFE_Y, SAFE_Z)) task.wait(0.05)
     M.corridorTween(CFrame.new(homePos.X, SAFE_Y, SAFE_Z)) task.wait(0.05)
     M.corridorTween(CFrame.new(homePos.X, SAFE_Y, homePos.Z)) task.wait(0.05)
-    M.tweenTo(M.getHomePosition()) task.wait(0.05)
+    M.tweenTo(CFrame.new(homePos.X, M._isGod and M.S.GodWalkY or homePos.Y, homePos.Z)) task.wait(0.05)
 end
 
 function M.returnToBase()
-    M.tweenTo(M.getHomePosition())
+    if M._isGod then
+        local hp = M.getHomePosition().Position
+        M.tweenTo(CFrame.new(hp.X, M.S.GodWalkY, hp.Z))
+    else
+        M.tweenTo(M.getHomePosition())
+    end
     task.wait(0.1)
 end
 
@@ -684,9 +858,9 @@ function M.toolMatchesRarity(tool, targetRarity, targetMutation)
     for _, r in pairs(tR) do if r == "Any" then isAny = true break end end
     if not isAny then
         if toolRarity and toolRarity ~= "" then
-            local m = false
-            for _, r in pairs(tR) do if toolRarity == r then m = true break end end
-            if not m then return false end
+            local m2 = false
+            for _, r in pairs(tR) do if toolRarity == r then m2 = true break end end
+            if not m2 then return false end
         else
             local wl = {}
             for _, r in pairs(tR) do for _, n in pairs(M.getBrainrotNames(r)) do wl[n] = true end end
@@ -1847,6 +2021,10 @@ local function isOwnWall(obj)
     return false
 end
 
+local function isOwnGodFloor(obj)
+    return obj.Name == "MzDGodFloor" or obj.Name == "MzDGodCatchFloor"
+end
+
 local function safeDestroyFolder(parent, folderName)
     if not parent then return end
     local f = parent:FindFirstChild(folderName)
@@ -1865,6 +2043,7 @@ local EVENT_MAPS = {"ValentinesMap","ArcadeMap","CandyMap","HalloweenMap","Chris
 local function isWallPart(p)
     if not p:IsA("BasePart") then return false end
     if isOwnWall(p) then return false end
+    if isOwnGodFloor(p) then return false end
     local n = p.Name:lower()
     local keywords = {"vipwall","sidewall","barrier","fence","blocker","border"}
     for _, k in pairs(keywords) do if n == k or n:find("^"..k) then return true end end
@@ -1880,6 +2059,7 @@ function M.mapDetectXRange(map, si)
     local function chk(p)
         if not p:IsA("BasePart") then return end
         if isOwnWall(p) then return end
+        if isOwnGodFloor(p) then return end
         if p.Size.Y > p.Size.X and p.Size.Y > p.Size.Z then return end
         if p.Position.Y > 50 or p.Position.Y < -30 then return end
         if p.Size.X < 5 then return end
@@ -1908,6 +2088,7 @@ local function getFloorParts(map, si)
     local function af(p)
         if not p:IsA("BasePart") then return end
         if isOwnWall(p) then return end
+        if isOwnGodFloor(p) then return end
         if p.Size.Y > p.Size.X and p.Size.Y > p.Size.Z then return end
         if p.Position.Y > 30 or p.Position.Y < -20 then return end
         if p.Size.X < 5 then return end
@@ -1940,7 +2121,7 @@ end
 function M.mapCleanup(map)
     for _, n in pairs(MAP_FOLDERS_REMOVE) do safeDestroyFolder(map, n) end
     for _, d in pairs(map:GetDescendants()) do
-        if d.Parent and not isOwnWall(d) and d:IsA("BasePart") then
+        if d.Parent and not isOwnWall(d) and not isOwnGodFloor(d) and d:IsA("BasePart") then
             if isWallPart(d) then pcall(function() d:Destroy() end) end
         end
     end
@@ -1950,7 +2131,7 @@ function M.mapCleanupShared(si)
     if not si then return end
     for _, n in pairs(MAP_FOLDERS_REMOVE) do safeDestroyFolder(si, n) end
     for _, d in pairs(si:GetDescendants()) do
-        if d:IsA("BasePart") and not isOwnWall(d) and isWallPart(d) then pcall(function() d:Destroy() end) end
+        if d:IsA("BasePart") and not isOwnWall(d) and not isOwnGodFloor(d) and isWallPart(d) then pcall(function() d:Destroy() end) end
     end
 end
 
@@ -1969,7 +2150,7 @@ function M.cleanupEventMaps()
         if eventMap then
             for _, folderName in pairs(EVENT_FOLDERS_REMOVE) do safeDestroyFolder(eventMap, folderName) end
             for _, d in pairs(eventMap:GetDescendants()) do
-                if d:IsA("BasePart") and not isOwnWall(d) and isWallPart(d) then pcall(function() d:Destroy() end) end
+                if d:IsA("BasePart") and not isOwnWall(d) and not isOwnGodFloor(d) and isWallPart(d) then pcall(function() d:Destroy() end) end
             end
         end
     end
@@ -2002,14 +2183,14 @@ function M.mapFillGaps(map, sx, ex)
     end
     if not ref then
         for _, c in pairs(map:GetChildren()) do
-            if c:IsA("BasePart") and c.Size.X > 50 and c.Size.Y < 10 and c.Position.Y < 20 then ref = c break end
+            if c:IsA("BasePart") and not isOwnGodFloor(c) and c.Size.X > 50 and c.Size.Y < 10 and c.Position.Y < 20 then ref = c break end
         end
     end
     if not ref then return end
     local fY, fH, fC, fM = ref.Position.Y, ref.Size.Y, ref.Color, ref.Material
     local segs = {}
     local function as(p)
-        if p:IsA("BasePart") and p.Size.X > 3 and math.abs(p.Position.Y - fY) < 10 and p.Size.Y < 15 then
+        if p:IsA("BasePart") and not isOwnGodFloor(p) and p.Size.X > 3 and math.abs(p.Position.Y - fY) < 10 and p.Size.Y < 15 then
             if not isOwnWall(p) then
                 table.insert(segs, {s = p.Position.X - p.Size.X/2, e = p.Position.X + p.Size.X/2})
             end
@@ -2079,7 +2260,7 @@ function M.mapBuildWalls(map, sx, ex)
         t.TextColor3 = MF.GLW t.TextScaled = true t.Font = Enum.Font.GothamBold t.Parent = sg
         local s2 = Instance.new("TextLabel")
         s2.Size = UDim2.new(0.6,0,0.2,0) s2.Position = UDim2.new(0.2,0,0.6,0)
-        s2.BackgroundTransparency = 1 s2.Text = "v10.6"
+        s2.BackgroundTransparency = 1 s2.Text = "v10.7"
         s2.TextColor3 = Color3.fromRGB(200,200,200) s2.TextScaled = true s2.Font = Enum.Font.Gotham s2.Parent = sg
     end
     local segs = {} local sl = 2000 local p = sx
@@ -2090,12 +2271,12 @@ function M.mapBuildWalls(map, sx, ex)
     end
     for i, s in pairs(segs) do
         local cx = s.s + s.l/2
-        local fw = mw("FrontWall"..i, Vector3.new(s.l, MF.WH, MF.WT), Vector3.new(cx, MF.WY, MF.SZ+MF.WT/2))
+        local fw = mw("FrontWall_"..i, Vector3.new(s.l, MF.WH, MF.WT), Vector3.new(cx, MF.WY, MF.SZ+MF.WT/2))
         at(fw, Enum.NormalId.Front) at(fw, Enum.NormalId.Back)
         ms("FS_t"..i, Vector3.new(s.l,1.5,0.3), Vector3.new(cx, MF.WY+MF.WH/2-0.75, MF.SZ+MF.WT+0.2))
         ms("FS_b"..i, Vector3.new(s.l,1.5,0.3), Vector3.new(cx, MF.WY-MF.WH/2+0.75, MF.SZ+MF.WT+0.2))
         ms("FS_m"..i, Vector3.new(s.l,0.5,0.3), Vector3.new(cx, MF.WY, MF.SZ+MF.WT+0.2))
-        local bw = mw("BackWall"..i, Vector3.new(s.l, MF.WH, MF.WT), Vector3.new(cx, MF.WY, -MF.SZ-MF.WT/2))
+        local bw = mw("BackWall_"..i, Vector3.new(s.l, MF.WH, MF.WT), Vector3.new(cx, MF.WY, -MF.SZ-MF.WT/2))
         at(bw, Enum.NormalId.Front) at(bw, Enum.NormalId.Back)
         ms("BS_t"..i, Vector3.new(s.l,1.5,0.3), Vector3.new(cx, MF.WY+MF.WH/2-0.75, -MF.SZ-MF.WT-0.2))
         ms("BS_b"..i, Vector3.new(s.l,1.5,0.3), Vector3.new(cx, MF.WY-MF.WH/2+0.75, -MF.SZ-MF.WT-0.2))
@@ -2109,11 +2290,20 @@ end
 
 function M.mapFixCollision(map, si, sx, ex)
     for _, p in pairs(getFloorParts(map, si)) do
-        pcall(function() p.CanCollide = true p.Transparency = 0 end)
+        -- Bij god mode: originele vloeren NIET collision maken
+        if M._isGod then
+            pcall(function() p.CanCollide = false p.Transparency = 1 end)
+        else
+            pcall(function() p.CanCollide = true p.Transparency = 0 end)
+        end
     end
     for _, c in pairs(map:GetChildren()) do
         if c:IsA("BasePart") and c.Name == "BridgeFloor" then
-            pcall(function() c.CanCollide = true c.Anchored = true end)
+            if M._isGod then
+                pcall(function() c.CanCollide = false c.Transparency = 1 c.Anchored = true end)
+            else
+                pcall(function() c.CanCollide = true c.Anchored = true end)
+            end
         end
     end
     local mf = map:FindFirstChild("MzDHubWalls")
@@ -2169,7 +2359,7 @@ function M.stopMapFixer()
     M.Status.mapFixer = "Uit"
 end
 
-print("[MzD Hub] Core v10.6 Geladen")
+print("[MzD Hub] Core v10.7 Geladen")
 
 -- ============================================
 -- GUI
@@ -2200,11 +2390,11 @@ local SL = {} for i = 1, 40 do table.insert(SL, tostring(i)) end
 local SPD = {"200","400","600","800","1000","1500","2000","3000","4000","INSTANT"}
 local SPM = {["200"]=200,["400"]=400,["600"]=600,["800"]=800,["1000"]=1000,["1500"]=1500,["2000"]=2000,["3000"]=3000,["4000"]=4000,["INSTANT"]=9999}
 local CSPD = {"100","200","300","400","500","600","800","1000","1500","2000"}
-local GODMODES = {"Dikke Vloer", "Oud"}
-local GODTHICK = {"100","200","300","500","750","1000"}
+local GODWALKY = {"-10","-15","-17","-20","-25","-30","-40","-50"}
+local GODFLOORY = {"-15","-18","-20","-25","-30","-40","-50"}
 
 local W = Fluent:CreateWindow({
-    Title = "MzD Hub", SubTitle = "v10.6 - Escape Tsunami From Brainrot",
+    Title = "MzD Hub", SubTitle = "v10.7 - Escape Tsunami From Brainrot",
     TabWidth = 160, Size = UDim2.fromOffset(600, 500),
     Acrylic = true, Theme = "Dark", MinimizeKey = Enum.KeyCode.RightControl
 })
@@ -2238,7 +2428,7 @@ local FSP = FT:AddParagraph({Title = "Farm Status", Content = "Idle"})
 local FPP = FT:AddParagraph({Title = "Statistieken", Content = "Geplaatst: 0 | Geupgrade: 0"})
 local FTG = FT:AddToggle("FarmToggle", {Title = "🚀 Auto Farm", Default = false})
 FTG:OnChanged(function(v)
-    if v then M.findBase() M.startFarming() Fluent:Notify({Title="Farm",Content="Gestart! God aan ✓",Duration=3})
+    if v then M.findBase() M.startFarming() Fluent:Notify({Title="Farm",Content="Gestart! God Mode aan ✓\nJe loopt nu ONDER de vloer!",Duration=4})
     else M.stopFarming() Fluent:Notify({Title="Farm",Content="Gestopt. #"..M.Status.farmCount,Duration=3}) end
 end)
 
@@ -2300,46 +2490,44 @@ AT2:AddButton({Title = "🗺️ Fix Map Eenmalig", Callback = function()
     pcall(function() M.mapRunFix() end) Fluent:Notify({Title="Map",Content="Gefixed!",Duration=3})
 end})
 
--- God Mode sectie in Auto tab
-AT2:AddParagraph({Title = "🛡️ God Mode v17", Content = "Dikke Vloer: maakt vloer 500 studs dik\nJij loopt eronder, golven niet\nBrainrots pakken via noclip werkt ✓"})
-AT2:AddDropdown("GodModeType", {
-    Title = "God Mode Methode",
-    Description = "Dikke Vloer = video methode\nOud = health restore only",
-    Values = GODMODES,
-    Default = "Dikke Vloer",
+-- God Mode sectie
+AT2:AddParagraph({Title = "🛡️ God Mode v18", Content = "Vervangt de vloer naar Y=-20\nJij loopt eronder op Y=-17\nKill zone zit op Y≈0 → jij bent eronder!\nBrainrots pakken via noclip + forceGrab ✓"})
+AT2:AddDropdown("GodWalkY", {
+    Title = "Loop Hoogte (Y)",
+    Description = "Hoe diep je onder de vloer loopt\n-17 = dicht bij kill zone maar brainrots in bereik\n-30 = veiliger maar verder weg",
+    Values = GODWALKY,
+    Default = "-17",
     Multi = false
 }):OnChanged(function(v)
-    M.S.GodMode = v
+    M.S.GodWalkY = tonumber(v) or -17
     if M._isGod then
-        M.disableGod()
-        task.wait(0.5)
-        M.enableGod()
+        godTeleportUnder()
     end
 end)
-AT2:AddDropdown("GodThickness", {
-    Title = "Vloer Dikte",
-    Description = "Dikker = golven komen er zeker niet door\n500 = standaard",
-    Values = GODTHICK,
-    Default = "500",
+AT2:AddDropdown("GodFloorY", {
+    Title = "Vloer Hoogte (Y)",
+    Description = "Waar de vervangende vloer komt\nMoet lager zijn dan Loop Hoogte - 3",
+    Values = GODFLOORY,
+    Default = "-20",
     Multi = false
 }):OnChanged(function(v)
-    M._godFloorThickness = tonumber(v) or 500
+    M.S.GodFloorY = tonumber(v) or -20
 end)
 local GDSP = AT2:AddParagraph({Title = "God Status", Content = "Uit"})
 local GDTG = AT2:AddToggle("GodToggle", {Title = "🛡️ God Mode AAN/UIT", Default = false})
 GDTG:OnChanged(function(v)
     if v then
         M.enableGod()
-        Fluent:Notify({Title="God Mode",Content="Aan! Methode: " .. M.S.GodMode .. " ✓",Duration=4})
+        Fluent:Notify({Title="God Mode v18",Content="Aan! Vloer vervangen → Y="..M.S.GodFloorY.."\nJij loopt op Y="..M.S.GodWalkY.."\nKill zone = Y≈0 → jij bent veilig!",Duration=6})
     else
         M.disableGod()
-        Fluent:Notify({Title="God Mode",Content="Uit. Vloer hersteld.",Duration=3})
+        Fluent:Notify({Title="God Mode",Content="Uit. Alles hersteld.",Duration=3})
     end
 end)
-AT2:AddButton({Title = "📍 Ga Onder Vloer", Callback = function()
-    if M._isGod and M._godWalkY then
-        godGoUnderFloor()
-        Fluent:Notify({Title="God Mode",Content="Naar Y=" .. math.floor(M._godWalkY),Duration=3})
+AT2:AddButton({Title = "📍 Teleport Onder Vloer", Callback = function()
+    if M._isGod then
+        godTeleportUnder()
+        Fluent:Notify({Title="God Mode",Content="Naar Y=" .. M.S.GodWalkY,Duration=3})
     else
         Fluent:Notify({Title="God Mode",Content="Zet eerst God Mode aan!",Duration=3})
     end
@@ -2408,11 +2596,7 @@ CT:AddButton({Title = "💝 Test Submit Nu", Callback = function()
     local ok = M.submitHearts()
     task.wait(1)
     local newH = M.getHeartCount()
-    local info = "Before: " .. prevH .. " hearts\n"
-    info = info .. "After: " .. newH .. " hearts\n"
-    info = info .. "Verschil: " .. (prevH - newH) .. "\n"
-    info = info .. "Submit returned: " .. tostring(ok) .. "\n"
-    info = info .. "Remotes gebruikt: " .. #M._valentineFoundRemotes
+    local info = "Before: " .. prevH .. " hearts\nAfter: " .. newH .. " hearts\nVerschil: " .. (prevH - newH) .. "\nSubmit: " .. tostring(ok) .. "\nRemotes: " .. #M._valentineFoundRemotes
     Fluent:Notify({Title="Submit Test",Content=info,Duration=10})
 end})
 CT:AddButton({Title = "💝 Scan Hearts/Values", Callback = function()
@@ -2479,21 +2663,30 @@ CT:AddButton({Title = "🔍 Debug Brainrots", Callback = function()
     Fluent:Notify({Title="Brainrots Debug",Content=info,Duration=12})
 end})
 
--- God Mode debug knop
 CT:AddParagraph({Title = "🛡️ God Mode Debug", Content = ""})
-CT:AddButton({Title = "🛡️ Debug God Mode Status", Callback = function()
+CT:AddButton({Title = "🛡️ Debug God Mode", Callback = function()
     local info = "God Mode: " .. (M._isGod and "AAN" or "UIT") .. "\n"
-    info = info .. "Methode: " .. M.S.GodMode .. "\n"
-    info = info .. "Vloer dikte: " .. M._godFloorThickness .. "\n"
-    info = info .. "WalkY: " .. tostring(M._godWalkY) .. "\n"
-    info = info .. "Vloerdelen opgeslagen: " .. #M._godOriginalFloors .. "\n"
+    info = info .. "WalkY: " .. M.S.GodWalkY .. " | FloorY: " .. M.S.GodFloorY .. "\n"
+    info = info .. "Originele vloeren: " .. #M._godOriginalFloors .. "\n"
+    info = info .. "Gemaakte vloeren: " .. #M._godCreatedFloors .. "\n"
+    info = info .. "Kill parts: " .. #M._godKillParts .. "\n"
     local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
     if hrp then
         info = info .. "Huidige Y: " .. string.format("%.1f", hrp.Position.Y) .. "\n"
     end
-    local floors = godFindFloorParts()
-    info = info .. "Gevonden vloerdelen: " .. #floors
+    local floors, map = godFindFloorParts()
+    info = info .. "Gevonden vloerdelen: " .. #floors .. "\n"
+    if map then info = info .. "Map: " .. map.Name end
     Fluent:Notify({Title="God Debug",Content=info,Duration=10})
+end})
+CT:AddButton({Title = "🔍 Scan Kill Parts", Callback = function()
+    local kills = godFindKillParts()
+    local info = "Gevonden kill parts: " .. #kills .. "\n\n"
+    for i, p in pairs(kills) do
+        if i > 10 then info = info .. "... +" .. (#kills - 10) .. " meer\n" break end
+        info = info .. p.Name .. " | Size: " .. tostring(p.Size) .. " | Y: " .. string.format("%.2f", p.Position.Y) .. "\n"
+    end
+    Fluent:Notify({Title="Kill Parts Scan",Content=info,Duration=10})
 end})
 
 local IP = CT:AddParagraph({Title = "Info", Content = "Laden..."})
@@ -2542,8 +2735,7 @@ task.spawn(function()
             AFKSP:SetDesc("Anti-AFK: " .. M.Status.afk)
             if not M.S.AntiAFK then pcall(function() if AFKTG.Value then AFKTG:SetValue(false) end end) end
 
-            -- God Mode status updater
-            GDSP:SetDesc(M.Status.god .. (M._godWalkY and (" | Y=" .. math.floor(M._godWalkY)) or ""))
+            GDSP:SetDesc(M.Status.god)
             if not M._isGod then pcall(function() if GDTG.Value then GDTG:SetValue(false) end end) end
 
             local hp = M.homePosition and M.homePosition.Position
@@ -2555,9 +2747,9 @@ task.spawn(function()
                 "\nBase: " .. (M.baseGUID or "Niet gevonden") ..
                 "\nHome: " .. hs ..
                 "\nCoridor Z: " .. string.format("%.1f", M.getCorridorZ()) ..
-                "\nGod: " .. (M._isGod and ("AAN 🛡️ [" .. M.S.GodMode .. "]") or "UIT") ..
+                "\nGod: " .. (M._isGod and ("AAN 🛡️ Y=" .. M.S.GodWalkY) or "UIT") ..
                 "\nHuidige Y: " .. curY ..
-                (M._godWalkY and (" | VloerY: " .. math.floor(M._godWalkY)) or "") ..
+                "\nKill zone: Y≈0 | Vloer: Y=" .. M.S.GodFloorY .. " | Loop: Y=" .. M.S.GodWalkY ..
                 "\nFarm: INSTANT | Corridor: " .. (M.S.CorridorSpeed or 1500) .. " studs/s" ..
                 "\nValentine remotes: " .. #M._valentineFoundRemotes .. " | Cache: " .. #M._valentineCachedParts
             )
@@ -2569,12 +2761,12 @@ end)
 task.spawn(function()
     task.wait(1) M.findBase() task.wait(0.5) M.detectWallZ()
     if M.baseGUID then
-        Fluent:Notify({Title="MzD Hub v10.6",Content="Base: "..M.baseGUID.."\nSpeed: INSTANT + Corridor "..M.S.CorridorSpeed.."\n🛡️ God Mode v17 (Dikke Vloer) beschikbaar!",Duration=6})
+        Fluent:Notify({Title="MzD Hub v10.7",Content="Base: "..M.baseGUID.."\nSpeed: INSTANT + Corridor "..M.S.CorridorSpeed.."\n🛡️ God Mode v18: Vervangende Vloer!\nKill zone Y≈0 → jij loopt op Y="..M.S.GodWalkY,Duration=7})
     else
-        Fluent:Notify({Title="MzD Hub v10.6",Content="Geladen! Klik 'Zoek Base' in Config.\n🛡️ God Mode v17 (Dikke Vloer) beschikbaar!",Duration=6})
+        Fluent:Notify({Title="MzD Hub v10.7",Content="Geladen! Klik 'Zoek Base' in Config.\n🛡️ God Mode v18 beschikbaar!",Duration=6})
     end
 end)
 
 W:SelectTab(1)
-Fluent:Notify({Title="MzD Hub v10.6",Content="Geladen ✦ RightCtrl = minimaliseer\n⚡ INSTANT + Corridor 1500\n🛡️ God Mode: Dikke Vloer methode\n💝 Valentine debug in Config",Duration=6})
-print("[MzD Hub] v10.6 VOLLEDIG GELADEN ✦")
+Fluent:Notify({Title="MzD Hub v10.7",Content="Geladen ✦ RightCtrl = minimaliseer\n⚡ INSTANT + Corridor 1500\n🛡️ God Mode: Vloer vervangen methode\nKill zone Y≈0 → jij op Y=-17\n💝 Valentine debug in Config",Duration=7})
+print("[MzD Hub] v10.7 VOLLEDIG GELADEN ✦")
