@@ -3,9 +3,9 @@
 -- loadstring(game:HttpGet("https://raw.githubusercontent.com/mzdtools/EBFT/main/Escape"))()
 -- ============================================
 
-local BASE_URL = "https://raw.githubusercontent.com/mzdtools/EBFT/main/modules/"
+local BASE_URL = "https://raw.githubusercontent.com/mzdtools/EBFT/main/"
+local CACHE_BUST = "?v=" .. tostring(math.random(1, 99999))
 
--- Volgorde is belangrijk: Core eerst, GUI laatst
 local MODULES = {
     "Core",
     "Movement",
@@ -17,17 +17,14 @@ local MODULES = {
     "GUI"
 }
 
--- Laad elke module
 for _, name in ipairs(MODULES) do
-    local url = BASE_URL .. name .. ".lua"
+    local url = BASE_URL .. name .. ".lua" .. CACHE_BUST
     local ok, err = pcall(function()
         loadstring(game:HttpGet(url))()
     end)
     if ok then
-        print("[MzD Hub] ✓ " .. name .. " geladen")
+        print("[MzD Hub] ✓ " .. name)
     else
-        warn("[MzD Hub] ✗ " .. name .. " FOUT: " .. tostring(err))
+        warn("[MzD Hub] ✗ " .. name .. ": " .. tostring(err))
     end
 end
-
-print("[MzD Hub] v12.2 Volledig geladen ✓")
