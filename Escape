@@ -1,6 +1,8 @@
 -- ============================================
--- MzD Hub v10.5 - VOLLEDIG
+-- MzD Hub v10.6 - VOLLEDIG
 -- Valentine fix, submit debug, snelle tweens
+-- + God Mode v17 DIKKE VLOER geïntegreerd
+-- Load: loadstring(game:HttpGet("https://raw.githubusercontent.com/mzdtools/EBFT/main/Escape"))()
 -- ============================================
 getgenv().MzD = {}
 local M = getgenv().MzD
@@ -8,6 +10,7 @@ local M = getgenv().MzD
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 local Player = Players.LocalPlayer
 
 -- ========== INIT ==========
@@ -56,6 +59,9 @@ M.S = {
     LuckyBlockRarity = {"Common"},
     LuckyBlockMutation = "Any",
     GodEnabled = false,
+    -- God Mode v17 instellingen
+    GodFloorThickness = 500,  -- hoe dik de vloer wordt
+    GodMode = "Dikke Vloer",  -- "Dikke Vloer" of "Oud"
 }
 
 M.Status = {
@@ -69,6 +75,7 @@ M.Status = {
     arcade = "Idle", arcadeCount = 0,
     mapFixer = "Uit",
     luckyBlock = "Idle", luckyBlockCount = 0,
+    god = "Uit",
 }
 
 -- ========== STATE ==========
@@ -96,49 +103,150 @@ M._valentineLastCacheScan = 0
 M._valentineFoundRemotes = {}
 M._valentineDebugLog = {}
 M.luckyBlockThread = nil
-M._godThread = nil
+
+-- God Mode v17 state
 M._isGod = false
-M._healthConn = nil
+M._godNoclipThread = nil
+M._godHealthConn = nil
+M._godDiedConn = nil
+M._godOriginalFloors = {}  -- sla originele vloer data op voor herstel
+M._godWalkY = nil          -- Y hoogte om onder vloer te lopen
+M._godFloorThickness = 500 -- vloerdikte
+
 M._wallZ_front = 173
 M._wallZ_back = -173
 
 local HIGH_RARITIES = {["Celestial"] = true, ["Divine"] = true, ["Infinity"] = true}
 
--- ========== GOD MODE ==========
-function M.enableGod()
-    if M._isGod then return end
-    M._isGod = true
-    M.S.GodEnabled = true
-    pcall(function()
-        local ch = Player.Character
-        if not ch then return end
-        for _, ff in pairs(ch:GetChildren()) do
-            if ff:IsA("ForceField") then ff:Destroy() end
+-- ============================================
+-- GOD MODE v17 - DIKKE VLOER
+-- ============================================
+
+local function godFindFloorParts()
+    local floors = {}
+    local map = nil
+
+    for _, c in pairs(workspace:GetChildren()) do
+        if c:IsA("Model") and c.Name:find("Map") and not c.Name:find("SharedInstances") then
+            if c:FindFirstChild("Spawners") or c:FindFirstChild("Gaps") or
+               c:FindFirstChild("FirstFloor") or c:FindFirstChild("Ground") then
+                map = c break
+            end
         end
-        local ff = Instance.new("ForceField")
-        ff.Visible = false
-        ff.Parent = ch
-    end)
-    pcall(function()
-        local ch = Player.Character
-        if not ch then return end
-        local hum = ch:FindFirstChild("Humanoid")
-        if not hum then return end
-        if M._healthConn then pcall(function() M._healthConn:Disconnect() end) end
-        M._healthConn = hum:GetPropertyChangedSignal("Health"):Connect(function()
-            if M._isGod and hum.Health < hum.MaxHealth and hum.Health > 0 then
-                hum.Health = hum.MaxHealth
+    end
+
+    local function checkPart(p)
+        if not p:IsA("BasePart") then return end
+        if p.Size.X > 20 and p.Size.Z > 5 and p.Size.Y < 20 then
+            if p.Position.Y > -10 and p.Position.Y < 30 then
+                table.insert(floors, p)
+            end
+        end
+    end
+
+    if map then
+        for _, c in pairs(map:GetChildren()) do
+            if c:IsA("BasePart") then
+                local n = c.Name:lower()
+                if n == "firstfloor" or n == "ground" or n == "floor" or
+                   n == "grass" or n == "path" or n == "road" or n == "platform" then
+                    table.insert(floors, c)
+                else
+                    checkPart(c)
+                end
+            end
+        end
+        local sp = map:FindFirstChild("Spawners")
+        if sp then for _, s in pairs(sp:GetChildren()) do checkPart(s) end end
+    end
+
+    -- SharedInstances vloeren
+    for _, c in pairs(workspace:GetChildren()) do
+        if c.Name:find("SharedInstances") then
+            local fl = c:FindFirstChild("Floors")
+            if fl then for _, f in pairs(fl:GetChildren()) do checkPart(f) end end
+            for _, f in pairs(c:GetChildren()) do checkPart(f) end
+        end
+    end
+
+    -- Fallback
+    if #floors == 0 then
+        for _, c in pairs(workspace:GetChildren()) do
+            if c:IsA("BasePart") then checkPart(c) end
+        end
+    end
+
+    return floors
+end
+
+local function godMakeFloorThick()
+    local floors = godFindFloorParts()
+    if #floors == 0 then
+        M.Status.god = "Geen vloer gevonden!"
+        return false
+    end
+
+    M._godOriginalFloors = {}
+    local minFloorY = math.huge
+
+    for _, p in pairs(floors) do
+        table.insert(M._godOriginalFloors, {
+            part = p,
+            size = p.Size,
+            position = p.Position,
+            canCollide = p.CanCollide
+        })
+
+        local topY = p.Position.Y + p.Size.Y / 2
+        if topY < minFloorY then minFloorY = topY end
+
+        pcall(function()
+            local newSizeY = p.Size.Y + M._godFloorThickness
+            local newPosY = topY - newSizeY / 2
+            p.Size = Vector3.new(p.Size.X, newSizeY, p.Size.Z)
+            p.Position = Vector3.new(p.Position.X, newPosY, p.Position.Z)
+            p.CanCollide = true
+            p.Anchored = true
+        end)
+    end
+
+    -- Loopruimte net onder de vloer oppervlak
+    M._godWalkY = minFloorY - 5
+    return true
+end
+
+local function godRestoreFloor()
+    for _, data in pairs(M._godOriginalFloors) do
+        pcall(function()
+            if data.part and data.part.Parent then
+                data.part.Size = data.size
+                data.part.Position = data.position
+                data.part.CanCollide = data.canCollide
             end
         end)
-    end)
-    M._godThread = task.spawn(function()
+    end
+    M._godOriginalFloors = {}
+    M._godWalkY = nil
+end
+
+local function godGoUnderFloor()
+    local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp or not M._godWalkY then return end
+    hrp.CFrame = CFrame.new(hrp.Position.X, M._godWalkY, hrp.Position.Z)
+end
+
+local function godStartNoclip()
+    if M._godNoclipThread then pcall(task.cancel, M._godNoclipThread) end
+    M._godNoclipThread = task.spawn(function()
         while M._isGod do
             pcall(function()
                 local ch = Player.Character
-                if not ch then return end
-                local hum = ch:FindFirstChild("Humanoid")
-                if hum and hum.Health < hum.MaxHealth and hum.Health > 0 then
-                    hum.Health = hum.MaxHealth
+                if ch then
+                    for _, p in pairs(ch:GetDescendants()) do
+                        if p:IsA("BasePart") then
+                            p.CanCollide = false
+                        end
+                    end
                 end
             end)
             task.wait(0.05)
@@ -146,18 +254,116 @@ function M.enableGod()
     end)
 end
 
+local function godSetupHealth(char)
+    if M._godHealthConn then pcall(function() M._godHealthConn:Disconnect() end) end
+    if M._godDiedConn then pcall(function() M._godDiedConn:Disconnect() end) end
+
+    local hum = char:WaitForChild("Humanoid", 5)
+    if not hum then return end
+
+    pcall(function()
+        hum.MaxHealth = math.huge
+        hum.Health = math.huge
+        hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+    end)
+
+    -- ForceField
+    for _, ff in pairs(char:GetChildren()) do
+        if ff:IsA("ForceField") then ff:Destroy() end
+    end
+    local ff = Instance.new("ForceField")
+    ff.Visible = false
+    ff.Parent = char
+
+    M._godHealthConn = hum:GetPropertyChangedSignal("Health"):Connect(function()
+        if not M._isGod then return end
+        pcall(function()
+            if hum.Health ~= math.huge then hum.Health = math.huge end
+        end)
+    end)
+
+    M._godDiedConn = hum.Died:Connect(function()
+        if not M._isGod then return end
+        M.Status.god = "Died geblokkeerd!"
+        task.defer(function()
+            pcall(function()
+                hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+                hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+                hum.MaxHealth = math.huge
+                hum.Health = math.huge
+            end)
+        end)
+    end)
+end
+
+function M.enableGod()
+    if M._isGod then return end
+    M._isGod = true
+    M.S.GodEnabled = true
+    M.Status.god = "Starten..."
+
+    if M.S.GodMode == "Dikke Vloer" then
+        -- v17: Dikke vloer methode
+        local ok = godMakeFloorThick()
+        if ok then
+            task.wait(0.2)
+            godGoUnderFloor()
+            godStartNoclip()
+            if Player.Character then godSetupHealth(Player.Character) end
+            M.Status.god = "Aan 🛡️ (Dikke Vloer, Y=" .. math.floor(M._godWalkY or 0) .. ")"
+        else
+            -- Fallback naar oud systeem als vloer niet gevonden
+            M.Status.god = "Aan 🛡️ (Fallback)"
+            godStartNoclip()
+            if Player.Character then godSetupHealth(Player.Character) end
+        end
+    else
+        -- Oud god mode systeem (health restore only)
+        godStartNoclip()
+        if Player.Character then godSetupHealth(Player.Character) end
+        M.Status.god = "Aan 🛡️ (Oud)"
+    end
+end
+
 function M.disableGod()
     M._isGod = false
     M.S.GodEnabled = false
-    if M._godThread then pcall(task.cancel, M._godThread) M._godThread = nil end
-    if M._healthConn then pcall(function() M._healthConn:Disconnect() end) M._healthConn = nil end
-    pcall(function()
-        local ch = Player.Character
-        if not ch then return end
+
+    if M._godNoclipThread then pcall(task.cancel, M._godNoclipThread) M._godNoclipThread = nil end
+    if M._godHealthConn then pcall(function() M._godHealthConn:Disconnect() end) M._godHealthConn = nil end
+    if M._godDiedConn then pcall(function() M._godDiedConn:Disconnect() end) M._godDiedConn = nil end
+
+    -- Herstel vloer
+    godRestoreFloor()
+
+    -- Zet character terug boven vloer
+    local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        hrp.CFrame = CFrame.new(hrp.Position.X, 10, hrp.Position.Z)
+    end
+
+    -- Herstel collision
+    local ch = Player.Character
+    if ch then
+        for _, p in pairs(ch:GetDescendants()) do
+            if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+                pcall(function() p.CanCollide = true end)
+            end
+        end
         for _, ff in pairs(ch:GetChildren()) do
             if ff:IsA("ForceField") then ff:Destroy() end
         end
-    end)
+        local hum = ch:FindFirstChild("Humanoid")
+        if hum then
+            pcall(function()
+                hum.MaxHealth = 100
+                hum.Health = 100
+                hum:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
+            end)
+        end
+    end
+
+    M.Status.god = "Uit"
 end
 
 -- ========== EQUIP ==========
@@ -247,17 +453,23 @@ end
 task.spawn(function() task.wait(3) M.findBase() end)
 
 -- ========== RESPAWN ==========
-Player.CharacterAdded:Connect(function()
+Player.CharacterAdded:Connect(function(character)
     task.wait(1.5)
     if M.S.InstantPickup then M.setupInstant() end
     task.wait(0.5)
     M.detectWallZ()
     if M._isGod then
-        M._isGod = false
-        if M._healthConn then pcall(function() M._healthConn:Disconnect() end) M._healthConn = nil end
-        if M._godThread then pcall(task.cancel, M._godThread) M._godThread = nil end
+        -- Herstart god mode na respawn
+        if M._godHealthConn then pcall(function() M._godHealthConn:Disconnect() end) M._godHealthConn = nil end
+        if M._godDiedConn then pcall(function() M._godDiedConn:Disconnect() end) M._godDiedConn = nil end
         task.wait(0.5)
-        M.enableGod()
+        godSetupHealth(character)
+        if M.S.GodMode == "Dikke Vloer" then
+            -- Vloer was al dik gemaakt, alleen under floor teleport
+            task.wait(0.5)
+            godGoUnderFloor()
+        end
+        M.Status.god = "Respawn ✓"
     end
 end)
 
@@ -1165,7 +1377,6 @@ M.setupInstant()
 -- ========== VALENTINE HELPERS ==========
 function M.getHeartCount()
     local count = 0
-    -- Methode 1: leaderstats
     pcall(function()
         local ls = Player:FindFirstChild("leaderstats")
         if ls then
@@ -1178,7 +1389,6 @@ function M.getHeartCount()
             end
         end
     end)
-    -- Methode 2: Player attributes
     if count == 0 then
         pcall(function()
             for _, attr in pairs({"Hearts","Candy","CandyGrams","Valentines","Love","CandyHearts","ValentineHearts"}) do
@@ -1189,7 +1399,6 @@ function M.getHeartCount()
             end
         end)
     end
-    -- Methode 3: Character attributes
     if count == 0 then
         pcall(function()
             local ch = Player.Character
@@ -1203,7 +1412,6 @@ function M.getHeartCount()
             end
         end)
     end
-    -- Methode 4: PlayerGui tekst scannen
     if count == 0 then
         pcall(function()
             for _, gui in pairs(Player.PlayerGui:GetDescendants()) do
@@ -1217,7 +1425,6 @@ function M.getHeartCount()
             end
         end)
     end
-    -- Methode 5: Zoek in alle value objects onder player
     if count == 0 then
         pcall(function()
             for _, v in pairs(Player:GetDescendants()) do
@@ -1238,57 +1445,34 @@ end
 function M.refreshValentineCache()
     M._valentineCachedParts = {}
     M._valentineLastCacheScan = tick()
-
     local keywords = {"heart","candy","valentine","love","gram","pickup","collect","token","coin"}
-
     local function shouldCache(obj)
         if not obj:IsA("BasePart") then return false end
         local n = obj.Name:lower()
-        for _, k in pairs(keywords) do
-            if n:find(k) then return true end
-        end
+        for _, k in pairs(keywords) do if n:find(k) then return true end end
         if obj.Parent then
             local pn = obj.Parent.Name:lower()
-            for _, k in pairs(keywords) do
-                if pn:find(k) then return true end
-            end
-            -- Grootouder check
+            for _, k in pairs(keywords) do if pn:find(k) then return true end end
             if obj.Parent.Parent then
                 local gpn = obj.Parent.Parent.Name:lower()
-                for _, k in pairs(keywords) do
-                    if gpn:find(k) then return true end
-                end
+                for _, k in pairs(keywords) do if gpn:find(k) then return true end end
             end
         end
         if obj:FindFirstChild("TouchInterest") then return true end
         return false
     end
-
-    -- Scan workspace
     for _, obj in pairs(workspace:GetDescendants()) do
-        if shouldCache(obj) then
-            table.insert(M._valentineCachedParts, obj)
-        end
+        if shouldCache(obj) then table.insert(M._valentineCachedParts, obj) end
     end
-
-    -- Scan event folders
-    local eventFolders = {
-        "ValentineItems","Hearts","CandyGrams","Valentines",
-        "EventItems","Collectibles","Pickups","CandyHearts",
-        "ValentineEvent","EventCollectibles","Tokens","Coins"
-    }
+    local eventFolders = {"ValentineItems","Hearts","CandyGrams","Valentines","EventItems","Collectibles","Pickups","CandyHearts","ValentineEvent","EventCollectibles","Tokens","Coins"}
     for _, fn in pairs(eventFolders) do
         local f = workspace:FindFirstChild(fn)
         if f then
             for _, d in pairs(f:GetDescendants()) do
-                if d:IsA("BasePart") then
-                    table.insert(M._valentineCachedParts, d)
-                end
+                if d:IsA("BasePart") then table.insert(M._valentineCachedParts, d) end
             end
         end
     end
-
-    -- Scan alle models/folders met event-achtige namen
     for _, c in pairs(workspace:GetChildren()) do
         if c:IsA("Model") or c:IsA("Folder") then
             local cn = c.Name:lower()
@@ -1305,61 +1489,45 @@ end
 
 function M._valentineOnDescAdded(d)
     if not M.S.ValentineEnabled then return end
-
     local keywords = {"heart","candy","valentine","love","gram","pickup","collect","token"}
-
     if d:IsA("BasePart") then
         local n = d.Name:lower()
         local matched = false
-        for _, k in pairs(keywords) do
-            if n:find(k) then matched = true break end
-        end
+        for _, k in pairs(keywords) do if n:find(k) then matched = true break end end
         if not matched and d.Parent then
             local pn = d.Parent.Name:lower()
-            for _, k in pairs(keywords) do
-                if pn:find(k) then matched = true break end
-            end
+            for _, k in pairs(keywords) do if pn:find(k) then matched = true break end end
         end
         if not matched and d:FindFirstChild("TouchInterest") then matched = true end
         if matched then
             table.insert(M._valentineCachedParts, d)
             pcall(function()
                 local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    firetouchinterest(hrp, d, 0)
-                    firetouchinterest(hrp, d, 1)
-                end
+                if hrp then firetouchinterest(hrp, d, 0) firetouchinterest(hrp, d, 1) end
             end)
         end
     end
-
     if d:IsA("ProximityPrompt") then
         pcall(function() d.HoldDuration = 0 d.MaxActivationDistance = 99999 end)
     end
 end
 
--- ========== VALENTINE REMOTE SCANNER & DEBUG ==========
+-- ========== VALENTINE REMOTE SCANNER ==========
 function M.scanValentineRemotes()
     M._valentineFoundRemotes = {}
     M._valentineDebugLog = {}
-
     local keywords = {"valentine","candy","heart","gram","gift","submit","turn","exchange","redeem","deliver","deposit","collect","love","token"}
-
     local function addLog(msg)
         table.insert(M._valentineDebugLog, msg)
         print("[MzD V-Debug] " .. msg)
     end
-
-    -- Scan ReplicatedStorage recursief
     local function scanFolder(parent, path, depth)
         if depth > 10 then return end
         for _, v in pairs(parent:GetChildren()) do
             local n = v.Name:lower()
             local fullPath = path .. "/" .. v.Name
             local matched = false
-            for _, k in pairs(keywords) do
-                if n:find(k) then matched = true break end
-            end
+            for _, k in pairs(keywords) do if n:find(k) then matched = true break end end
             if matched then
                 local rType = "Unknown"
                 if v:IsA("RemoteEvent") then rType = "RemoteEvent"
@@ -1367,28 +1535,14 @@ function M.scanValentineRemotes()
                 elseif v:IsA("BindableEvent") then rType = "BindableEvent"
                 elseif v:IsA("BindableFunction") then rType = "BindableFunction"
                 else rType = v.ClassName end
-
-                table.insert(M._valentineFoundRemotes, {
-                    name = v.Name,
-                    path = fullPath,
-                    type = rType,
-                    object = v
-                })
+                table.insert(M._valentineFoundRemotes, {name = v.Name, path = fullPath, type = rType, object = v})
                 addLog("✓ " .. rType .. ": " .. fullPath)
             end
             scanFolder(v, fullPath, depth + 1)
         end
     end
-
     addLog("=== VALENTINE REMOTE SCAN ===")
-
-    -- ReplicatedStorage
-    pcall(function()
-        addLog("Scanning ReplicatedStorage...")
-        scanFolder(game:GetService("ReplicatedStorage"), "RS", 0)
-    end)
-
-    -- Workspace (voor stations)
+    pcall(function() addLog("Scanning ReplicatedStorage...") scanFolder(game:GetService("ReplicatedStorage"), "RS", 0) end)
     pcall(function()
         addLog("Scanning Workspace voor stations...")
         local stationKeywords = {"station","gram","submit","turn","exchange","valentine","heart","candy"}
@@ -1398,12 +1552,7 @@ function M.scanValentineRemotes()
                 local ppn = c.Parent and c.Parent.Parent and c.Parent.Parent.Name:lower() or ""
                 for _, k in pairs(stationKeywords) do
                     if pn:find(k) or ppn:find(k) then
-                        table.insert(M._valentineFoundRemotes, {
-                            name = c.Name,
-                            path = "WS/" .. (c.Parent and c.Parent.Name or "?") .. "/" .. c.Name,
-                            type = "ProximityPrompt",
-                            object = c
-                        })
+                        table.insert(M._valentineFoundRemotes, {name = c.Name, path = "WS/" .. (c.Parent and c.Parent.Name or "?") .. "/" .. c.Name, type = "ProximityPrompt", object = c})
                         addLog("✓ Prompt: " .. (c.Parent and c.Parent.Name or "?") .. "/" .. c.Name)
                         break
                     end
@@ -1411,77 +1560,50 @@ function M.scanValentineRemotes()
             end
         end
     end)
-
-    -- Scan player values
     pcall(function()
         addLog("Scanning Player values...")
         for _, v in pairs(Player:GetDescendants()) do
             if v:IsA("IntValue") or v:IsA("NumberValue") or v:IsA("StringValue") then
                 local n = v.Name:lower()
                 for _, k in pairs(keywords) do
-                    if n:find(k) then
-                        addLog("✓ Value: " .. v:GetFullName() .. " = " .. tostring(v.Value))
-                        break
-                    end
+                    if n:find(k) then addLog("✓ Value: " .. v:GetFullName() .. " = " .. tostring(v.Value)) break end
                 end
             end
         end
-        -- Attributes
         for _, attr in pairs({"Hearts","Candy","CandyGrams","Valentines","Love","CandyHearts","ValentineHearts"}) do
             local v = Player:GetAttribute(attr)
-            if v ~= nil then
-                addLog("✓ Attr: Player." .. attr .. " = " .. tostring(v))
-            end
+            if v ~= nil then addLog("✓ Attr: Player." .. attr .. " = " .. tostring(v)) end
         end
     end)
-
     addLog("=== Gevonden: " .. #M._valentineFoundRemotes .. " remotes/prompts ===")
     addLog("Hearts count: " .. M.getHeartCount())
-
     return M._valentineFoundRemotes, M._valentineDebugLog
 end
 
--- ========== VALENTINE SUBMIT (VERBETERD) ==========
+-- ========== VALENTINE SUBMIT ==========
 function M.submitHearts()
     local submitted = false
-    local submitLog = {}
-
-    local function addLog(msg)
-        table.insert(submitLog, msg)
-    end
-
-    -- Methode 1: Alle gevonden remotes van scan gebruiken
     if #M._valentineFoundRemotes > 0 then
         for _, remote in pairs(M._valentineFoundRemotes) do
             local obj = remote.object
             if obj and obj.Parent then
                 if remote.type == "RemoteEvent" then
-                    pcall(function() obj:FireServer() addLog("Fire: " .. remote.path) submitted = true end)
+                    pcall(function() obj:FireServer() submitted = true end)
                     pcall(function() obj:FireServer(true) end)
                     pcall(function() obj:FireServer(Player.Character) end)
                     pcall(function() obj:FireServer("submit") end)
-                    pcall(function() obj:FireServer("Submit") end)
                     pcall(function() obj:FireServer(100) end)
                 elseif remote.type == "RemoteFunction" then
-                    pcall(function() obj:InvokeServer() addLog("Invoke: " .. remote.path) submitted = true end)
+                    pcall(function() obj:InvokeServer() submitted = true end)
                     pcall(function() obj:InvokeServer(true) end)
                     pcall(function() obj:InvokeServer("submit") end)
-                    pcall(function() obj:InvokeServer("Submit") end)
                     pcall(function() obj:InvokeServer(100) end)
                 elseif remote.type == "ProximityPrompt" then
-                    pcall(function()
-                        obj.MaxActivationDistance = math.huge
-                        obj.HoldDuration = 0
-                        fireproximityprompt(obj)
-                        addLog("Prompt: " .. remote.path)
-                        submitted = true
-                    end)
+                    pcall(function() obj.MaxActivationDistance = math.huge obj.HoldDuration = 0 fireproximityprompt(obj) submitted = true end)
                 end
             end
         end
     end
-
-    -- Methode 2: Brede scan ReplicatedStorage (backup)
     pcall(function()
         local rs = game:GetService("ReplicatedStorage")
         local keywords = {"valentine","candy","submit","heart","gram","gift","collect","turn","exchange","redeem","deliver","deposit","love"}
@@ -1493,17 +1615,12 @@ function M.submitHearts()
                 for _, k in pairs(keywords) do if n:find(k) then matched = true break end end
                 if matched then
                     if v:IsA("RemoteEvent") then
-                        pcall(function() v:FireServer() end)
-                        pcall(function() v:FireServer(true) end)
-                        pcall(function() v:FireServer("submit") end)
-                        pcall(function() v:FireServer(Player.Character) end)
-                        pcall(function() v:FireServer(100) end)
+                        pcall(function() v:FireServer() end) pcall(function() v:FireServer(true) end)
+                        pcall(function() v:FireServer("submit") end) pcall(function() v:FireServer(Player.Character) end)
                         submitted = true
                     elseif v:IsA("RemoteFunction") then
-                        pcall(function() v:InvokeServer() end)
-                        pcall(function() v:InvokeServer(true) end)
+                        pcall(function() v:InvokeServer() end) pcall(function() v:InvokeServer(true) end)
                         pcall(function() v:InvokeServer("submit") end)
-                        pcall(function() v:InvokeServer(100) end)
                         submitted = true
                     end
                 end
@@ -1512,8 +1629,6 @@ function M.submitHearts()
         end
         searchRemotes(rs, 0)
     end)
-
-    -- Methode 3: Net/RF packages
     pcall(function()
         local net = game:GetService("ReplicatedStorage"):FindFirstChild("Packages")
         if net then net = net:FindFirstChild("Net") end
@@ -1521,20 +1636,11 @@ function M.submitHearts()
         for _, v in pairs(net:GetDescendants()) do
             local n = v.Name:lower()
             if n:find("candy") or n:find("heart") or n:find("valentine") or n:find("gram") or n:find("submit") or n:find("collect") then
-                if v:IsA("RemoteFunction") then
-                    pcall(function() v:InvokeServer() submitted = true end)
-                    pcall(function() v:InvokeServer(true) end)
-                    pcall(function() v:InvokeServer("submit") end)
-                elseif v:IsA("RemoteEvent") then
-                    pcall(function() v:FireServer() submitted = true end)
-                    pcall(function() v:FireServer(true) end)
-                    pcall(function() v:FireServer("submit") end)
-                end
+                if v:IsA("RemoteFunction") then pcall(function() v:InvokeServer() submitted = true end) pcall(function() v:InvokeServer(true) end)
+                elseif v:IsA("RemoteEvent") then pcall(function() v:FireServer() submitted = true end) pcall(function() v:FireServer(true) end) end
             end
         end
     end)
-
-    -- Methode 4: Proximity Prompts op stations in workspace
     pcall(function()
         local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
         if not hrp then return end
@@ -1542,32 +1648,21 @@ function M.submitHearts()
             if d:IsA("ProximityPrompt") then
                 local pn = d.Parent and d.Parent.Name:lower() or ""
                 local ppn = d.Parent and d.Parent.Parent and d.Parent.Parent.Name:lower() or ""
-                if pn:find("station") or pn:find("gram") or pn:find("submit") or pn:find("valentine") or pn:find("heart") or
-                    ppn:find("station") or ppn:find("gram") or ppn:find("submit") or ppn:find("valentine") then
-                    pcall(function()
-                        d.MaxActivationDistance = math.huge
-                        d.HoldDuration = 0
-                        fireproximityprompt(d)
-                        submitted = true
-                    end)
+                if pn:find("station") or pn:find("gram") or pn:find("submit") or pn:find("valentine") or pn:find("heart") or ppn:find("station") or ppn:find("gram") or ppn:find("submit") or ppn:find("valentine") then
+                    pcall(function() d.MaxActivationDistance = math.huge d.HoldDuration = 0 fireproximityprompt(d) submitted = true end)
                 end
             end
         end
-        -- Touch alle station parts
         for _, d in pairs(workspace:GetDescendants()) do
             if d:IsA("BasePart") then
                 local n = d.Name:lower()
                 local pn = d.Parent and d.Parent.Name:lower() or ""
-                if n:find("station") or n:find("submit") or n:find("gram") or
-                    pn:find("station") or pn:find("submit") or pn:find("gram") then
-                    pcall(function() firetouchinterest(hrp, d, 0) end)
-                    pcall(function() firetouchinterest(hrp, d, 1) end)
+                if n:find("station") or n:find("submit") or n:find("gram") or pn:find("station") or pn:find("submit") or pn:find("gram") then
+                    pcall(function() firetouchinterest(hrp, d, 0) end) pcall(function() firetouchinterest(hrp, d, 1) end)
                 end
             end
         end
     end)
-
-    -- Methode 5: PlotAction proberen (misschien heeft het game een submit via PlotAction)
     pcall(function()
         if M.PlotAction then
             pcall(function() M.PlotAction:InvokeServer("Submit Hearts") end)
@@ -1576,23 +1671,6 @@ function M.submitHearts()
             pcall(function() M.PlotAction:InvokeServer("Collect Valentine") end)
         end
     end)
-
-    -- Methode 6: Alle RemoteEvents in hele game met relevante namen
-    pcall(function()
-        for _, v in pairs(game:GetDescendants()) do
-            if v:IsA("RemoteEvent") then
-                local n = v.Name:lower()
-                if n:find("candy") or n:find("heart") or n:find("valentine") or n:find("gram") or n:find("submit") then
-                    pcall(function() v:FireServer() end)
-                    pcall(function() v:FireServer(true) end)
-                    pcall(function() v:FireServer("submit") end)
-                    submitted = true
-                end
-            end
-        end
-    end)
-
-    M._lastSubmitLog = submitLog
     return submitted
 end
 
@@ -1602,17 +1680,12 @@ function M.startValentine()
     M.S.ValentineEnabled = true
     M.Status.valentineCount = 0
     M._valentineCollecting = true
-
-    -- Eerste scan voor remotes
     M.scanValentineRemotes()
     M.refreshValentineCache()
-
     if M._valentineDescAddedConn then pcall(function() M._valentineDescAddedConn:Disconnect() end) end
     M._valentineDescAddedConn = workspace.DescendantAdded:Connect(function(d)
         pcall(function() M._valentineOnDescAdded(d) end)
     end)
-
-    -- Heartbeat collector
     M.valentineCollectorConn = RunService.Heartbeat:Connect(function()
         if not M.S.ValentineEnabled or not M._valentineCollecting then return end
         pcall(function()
@@ -1620,22 +1693,15 @@ function M.startValentine()
             if not hrp then return end
             if tick() - M._valentineLastCacheScan > 10 then
                 local alive = {}
-                for _, p in pairs(M._valentineCachedParts) do
-                    if p and p.Parent then table.insert(alive, p) end
-                end
+                for _, p in pairs(M._valentineCachedParts) do if p and p.Parent then table.insert(alive, p) end end
                 M._valentineCachedParts = alive
                 M._valentineLastCacheScan = tick()
             end
             for _, p in pairs(M._valentineCachedParts) do
-                if p and p.Parent then
-                    firetouchinterest(hrp, p, 0)
-                    firetouchinterest(hrp, p, 1)
-                end
+                if p and p.Parent then firetouchinterest(hrp, p, 0) firetouchinterest(hrp, p, 1) end
             end
         end)
     end)
-
-    -- Turbo thread
     M.valentineTurboThread = task.spawn(function()
         while M.S.ValentineEnabled do
             if M._valentineCollecting then
@@ -1643,18 +1709,13 @@ function M.startValentine()
                     local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
                     if not hrp then return end
                     for _, p in pairs(M._valentineCachedParts) do
-                        if p and p.Parent then
-                            firetouchinterest(hrp, p, 0)
-                            firetouchinterest(hrp, p, 1)
-                        end
+                        if p and p.Parent then firetouchinterest(hrp, p, 0) firetouchinterest(hrp, p, 1) end
                     end
                 end)
             end
             task.wait()
         end
     end)
-
-    -- Noclip voor valentine
     M.valentineNoclipConn = RunService.Stepped:Connect(function()
         if not M.S.ValentineEnabled then return end
         pcall(function()
@@ -1665,32 +1726,24 @@ function M.startValentine()
             end
         end)
     end)
-
-    -- Hoofd loop
     M.valentineThread = task.spawn(function()
         local submitCooldown = 0
         local remoteScanCooldown = 0
-
         while M.S.ValentineEnabled do
             local ok, err = pcall(function()
-                -- Periodiek remotes opnieuw scannen (elke 60 seconden)
                 if tick() - remoteScanCooldown > 60 then
                     M.scanValentineRemotes()
                     remoteScanCooldown = tick()
                 end
-
                 local h = M.getHeartCount()
                 M.Status.valentine = "Collecten " .. h .. " | Cache:" .. #M._valentineCachedParts .. " | R:" .. #M._valentineFoundRemotes .. " | #" .. M.Status.valentineCount
-
                 if h >= 100 then
                     if tick() - submitCooldown < 1 then task.wait(0.2) return end
                     M.Status.valentine = "Inleveren... (" .. h .. " harten)"
                     M._valentineCollecting = false
                     task.wait(0.3)
-
                     local prevH = h
                     local success = false
-
                     for attempt = 1, 10 do
                         if not M.S.ValentineEnabled then break end
                         M.Status.valentine = "Submit poging " .. attempt .. "/10... (H:" .. M.getHeartCount() .. ")"
@@ -1706,12 +1759,10 @@ function M.startValentine()
                         end
                         task.wait(0.5)
                     end
-
                     if not success then
                         M.Status.valentine = "Submit mislukt! Check debug. Verder collecten..."
                         submitCooldown = tick() + 5
                     end
-
                     task.wait(0.5)
                     M.refreshValentineCache()
                     M._valentineCollecting = true
@@ -2028,7 +2079,7 @@ function M.mapBuildWalls(map, sx, ex)
         t.TextColor3 = MF.GLW t.TextScaled = true t.Font = Enum.Font.GothamBold t.Parent = sg
         local s2 = Instance.new("TextLabel")
         s2.Size = UDim2.new(0.6,0,0.2,0) s2.Position = UDim2.new(0.2,0,0.6,0)
-        s2.BackgroundTransparency = 1 s2.Text = "v10.5"
+        s2.BackgroundTransparency = 1 s2.Text = "v10.6"
         s2.TextColor3 = Color3.fromRGB(200,200,200) s2.TextScaled = true s2.Font = Enum.Font.Gotham s2.Parent = sg
     end
     local segs = {} local sl = 2000 local p = sx
@@ -2118,7 +2169,7 @@ function M.stopMapFixer()
     M.Status.mapFixer = "Uit"
 end
 
-print("[MzD Hub] Core v10.5 Geladen")
+print("[MzD Hub] Core v10.6 Geladen")
 
 -- ============================================
 -- GUI
@@ -2149,9 +2200,11 @@ local SL = {} for i = 1, 40 do table.insert(SL, tostring(i)) end
 local SPD = {"200","400","600","800","1000","1500","2000","3000","4000","INSTANT"}
 local SPM = {["200"]=200,["400"]=400,["600"]=600,["800"]=800,["1000"]=1000,["1500"]=1500,["2000"]=2000,["3000"]=3000,["4000"]=4000,["INSTANT"]=9999}
 local CSPD = {"100","200","300","400","500","600","800","1000","1500","2000"}
+local GODMODES = {"Dikke Vloer", "Oud"}
+local GODTHICK = {"100","200","300","500","750","1000"}
 
 local W = Fluent:CreateWindow({
-    Title = "MzD Hub", SubTitle = "v10.5 - Escape Tsunami From Brainrot",
+    Title = "MzD Hub", SubTitle = "v10.6 - Escape Tsunami From Brainrot",
     TabWidth = 160, Size = UDim2.fromOffset(600, 500),
     Acrylic = true, Theme = "Dark", MinimizeKey = Enum.KeyCode.RightControl
 })
@@ -2246,12 +2299,52 @@ MFTG:OnChanged(function(v) if v then M.startMapFixer() else M.stopMapFixer() end
 AT2:AddButton({Title = "🗺️ Fix Map Eenmalig", Callback = function()
     pcall(function() M.mapRunFix() end) Fluent:Notify({Title="Map",Content="Gefixed!",Duration=3})
 end})
-AT2:AddParagraph({Title = "🛡️ Bescherming", Content = ""})
-local GDTG = AT2:AddToggle("GodToggle", {Title = "🛡️ God Mode", Default = false})
-GDTG:OnChanged(function(v)
-    if v then M.enableGod() Fluent:Notify({Title="God Mode",Content="Aan! ✓",Duration=3})
-    else M.disableGod() Fluent:Notify({Title="God Mode",Content="Uit.",Duration=3}) end
+
+-- God Mode sectie in Auto tab
+AT2:AddParagraph({Title = "🛡️ God Mode v17", Content = "Dikke Vloer: maakt vloer 500 studs dik\nJij loopt eronder, golven niet\nBrainrots pakken via noclip werkt ✓"})
+AT2:AddDropdown("GodModeType", {
+    Title = "God Mode Methode",
+    Description = "Dikke Vloer = video methode\nOud = health restore only",
+    Values = GODMODES,
+    Default = "Dikke Vloer",
+    Multi = false
+}):OnChanged(function(v)
+    M.S.GodMode = v
+    if M._isGod then
+        M.disableGod()
+        task.wait(0.5)
+        M.enableGod()
+    end
 end)
+AT2:AddDropdown("GodThickness", {
+    Title = "Vloer Dikte",
+    Description = "Dikker = golven komen er zeker niet door\n500 = standaard",
+    Values = GODTHICK,
+    Default = "500",
+    Multi = false
+}):OnChanged(function(v)
+    M._godFloorThickness = tonumber(v) or 500
+end)
+local GDSP = AT2:AddParagraph({Title = "God Status", Content = "Uit"})
+local GDTG = AT2:AddToggle("GodToggle", {Title = "🛡️ God Mode AAN/UIT", Default = false})
+GDTG:OnChanged(function(v)
+    if v then
+        M.enableGod()
+        Fluent:Notify({Title="God Mode",Content="Aan! Methode: " .. M.S.GodMode .. " ✓",Duration=4})
+    else
+        M.disableGod()
+        Fluent:Notify({Title="God Mode",Content="Uit. Vloer hersteld.",Duration=3})
+    end
+end)
+AT2:AddButton({Title = "📍 Ga Onder Vloer", Callback = function()
+    if M._isGod and M._godWalkY then
+        godGoUnderFloor()
+        Fluent:Notify({Title="God Mode",Content="Naar Y=" .. math.floor(M._godWalkY),Duration=3})
+    else
+        Fluent:Notify({Title="God Mode",Content="Zet eerst God Mode aan!",Duration=3})
+    end
+end})
+
 AT2:AddParagraph({Title = "✨ Overige", Content = ""})
 AT2:AddToggle("InstantToggle", {Title = "⚡ Instant Pickup", Default = true}):OnChanged(function(v)
     M.S.InstantPickup = v if v then M.setupInstant() end
@@ -2299,8 +2392,7 @@ CT:AddButton({Title = "🗑️ Leeg Werk Slot", Callback = function()
 end})
 CT:AddButton({Title = "🏠 Ga Naar Base", Callback = function() M.findBase() M.returnToBase() end})
 
--- Valentine Debug Buttons
-CT:AddParagraph({Title = "💝 Valentine Debug", Content = "Gebruik deze knoppen om te zien wat er gevonden wordt"})
+CT:AddParagraph({Title = "💝 Valentine Debug", Content = ""})
 CT:AddButton({Title = "🔍 Scan Valentine Remotes", Callback = function()
     local remotes, log = M.scanValentineRemotes()
     local info = "Gevonden: " .. #remotes .. " remotes/prompts\n"
@@ -2325,36 +2417,25 @@ CT:AddButton({Title = "💝 Test Submit Nu", Callback = function()
 end})
 CT:AddButton({Title = "💝 Scan Hearts/Values", Callback = function()
     local info = "Hearts count: " .. M.getHeartCount() .. "\n\n"
-    -- Leaderstats
     pcall(function()
         local ls = Player:FindFirstChild("leaderstats")
         if ls then
             info = info .. "Leaderstats:\n"
-            for _, v in pairs(ls:GetChildren()) do
-                info = info .. "  " .. v.Name .. " = " .. tostring(v.Value) .. "\n"
-            end
-        else
-            info = info .. "Geen leaderstats!\n"
-        end
+            for _, v in pairs(ls:GetChildren()) do info = info .. "  " .. v.Name .. " = " .. tostring(v.Value) .. "\n" end
+        else info = info .. "Geen leaderstats!\n" end
     end)
-    -- Attributes
     pcall(function()
         info = info .. "\nPlayer Attributes:\n"
         local found = false
         for _, attr in pairs({"Hearts","Candy","CandyGrams","Valentines","Love","CandyHearts","Money","Coins","Tokens"}) do
             local v = Player:GetAttribute(attr)
-            if v ~= nil then
-                info = info .. "  " .. attr .. " = " .. tostring(v) .. "\n"
-                found = true
-            end
+            if v ~= nil then info = info .. "  " .. attr .. " = " .. tostring(v) .. "\n" found = true end
         end
         if not found then info = info .. "  (geen relevante)\n" end
     end)
-    -- Cache
     info = info .. "\nCached parts: " .. #M._valentineCachedParts
     Fluent:Notify({Title="Valentine Values",Content=info,Duration=15})
 end})
-
 CT:AddButton({Title = "🔍 Scan Lucky Blocks", Callback = function()
     if not M.ActiveLuckyBlocks then M.ActiveLuckyBlocks = workspace:FindFirstChild("ActiveLuckyBlocks") end
     local cnt = 0 local info = ""
@@ -2397,6 +2478,24 @@ CT:AddButton({Title = "🔍 Debug Brainrots", Callback = function()
     if info == "" then info = "Leeg!" end
     Fluent:Notify({Title="Brainrots Debug",Content=info,Duration=12})
 end})
+
+-- God Mode debug knop
+CT:AddParagraph({Title = "🛡️ God Mode Debug", Content = ""})
+CT:AddButton({Title = "🛡️ Debug God Mode Status", Callback = function()
+    local info = "God Mode: " .. (M._isGod and "AAN" or "UIT") .. "\n"
+    info = info .. "Methode: " .. M.S.GodMode .. "\n"
+    info = info .. "Vloer dikte: " .. M._godFloorThickness .. "\n"
+    info = info .. "WalkY: " .. tostring(M._godWalkY) .. "\n"
+    info = info .. "Vloerdelen opgeslagen: " .. #M._godOriginalFloors .. "\n"
+    local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        info = info .. "Huidige Y: " .. string.format("%.1f", hrp.Position.Y) .. "\n"
+    end
+    local floors = godFindFloorParts()
+    info = info .. "Gevonden vloerdelen: " .. #floors
+    Fluent:Notify({Title="God Debug",Content=info,Duration=10})
+end})
+
 local IP = CT:AddParagraph({Title = "Info", Content = "Laden..."})
 
 -- ===== SETTINGS TAB =====
@@ -2443,16 +2542,22 @@ task.spawn(function()
             AFKSP:SetDesc("Anti-AFK: " .. M.Status.afk)
             if not M.S.AntiAFK then pcall(function() if AFKTG.Value then AFKTG:SetValue(false) end end) end
 
+            -- God Mode status updater
+            GDSP:SetDesc(M.Status.god .. (M._godWalkY and (" | Y=" .. math.floor(M._godWalkY)) or ""))
             if not M._isGod then pcall(function() if GDTG.Value then GDTG:SetValue(false) end end) end
 
             local hp = M.homePosition and M.homePosition.Position
             local hs = hp and string.format("X:%.1f Y:%.1f Z:%.1f", hp.X, hp.Y, hp.Z) or "Niet ingesteld"
+            local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+            local curY = hrp and string.format("%.1f", hrp.Position.Y) or "?"
             IP:SetDesc(
                 "Speler: " .. Player.Name ..
                 "\nBase: " .. (M.baseGUID or "Niet gevonden") ..
                 "\nHome: " .. hs ..
                 "\nCoridor Z: " .. string.format("%.1f", M.getCorridorZ()) ..
-                "\nGod: " .. (M._isGod and "AAN 🛡️" or "UIT") ..
+                "\nGod: " .. (M._isGod and ("AAN 🛡️ [" .. M.S.GodMode .. "]") or "UIT") ..
+                "\nHuidige Y: " .. curY ..
+                (M._godWalkY and (" | VloerY: " .. math.floor(M._godWalkY)) or "") ..
                 "\nFarm: INSTANT | Corridor: " .. (M.S.CorridorSpeed or 1500) .. " studs/s" ..
                 "\nValentine remotes: " .. #M._valentineFoundRemotes .. " | Cache: " .. #M._valentineCachedParts
             )
@@ -2464,12 +2569,12 @@ end)
 task.spawn(function()
     task.wait(1) M.findBase() task.wait(0.5) M.detectWallZ()
     if M.baseGUID then
-        Fluent:Notify({Title="MzD Hub v10.5",Content="Base: "..M.baseGUID.."\nSpeed: INSTANT + Corridor "..M.S.CorridorSpeed,Duration=5})
+        Fluent:Notify({Title="MzD Hub v10.6",Content="Base: "..M.baseGUID.."\nSpeed: INSTANT + Corridor "..M.S.CorridorSpeed.."\n🛡️ God Mode v17 (Dikke Vloer) beschikbaar!",Duration=6})
     else
-        Fluent:Notify({Title="MzD Hub v10.5",Content="Geladen! Klik 'Zoek Base' in Config.",Duration=5})
+        Fluent:Notify({Title="MzD Hub v10.6",Content="Geladen! Klik 'Zoek Base' in Config.\n🛡️ God Mode v17 (Dikke Vloer) beschikbaar!",Duration=6})
     end
 end)
 
 W:SelectTab(1)
-Fluent:Notify({Title="MzD Hub v10.5",Content="Geladen ✦ RightCtrl = minimaliseer\n⚡ INSTANT + Corridor 1500\n💝 Valentine debug in Config",Duration=5})
-print("[MzD Hub] v10.5 VOLLEDIG GELADEN ✦")
+Fluent:Notify({Title="MzD Hub v10.6",Content="Geladen ✦ RightCtrl = minimaliseer\n⚡ INSTANT + Corridor 1500\n🛡️ God Mode: Dikke Vloer methode\n💝 Valentine debug in Config",Duration=6})
+print("[MzD Hub] v10.6 VOLLEDIG GELADEN ✦")
