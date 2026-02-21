@@ -346,19 +346,42 @@ end
 local function moveTowerToFloor(floorTopY, offset)
     local tower = findTower()
     if not tower then return false end
+    
+    -- Sla origineel OP bij eerste keer
     if not M._towerOriginalCF then
         pcall(function()
             M._towerOriginalCF = tower:GetPivot()
-            M._towerOriginalY = M._towerOriginalCF.Position.Y
         end)
     end
-    local towerBottomY = getTowerBottomY()
-    if not towerBottomY then return false end
+    
+    -- Altijd vanuit ORIGINELE positie berekenen
+    local origPivot = M._towerOriginalCF
+    if not origPivot then return false end
+    
+    -- Bereken originele bottom Y
+    local origPivotY = origPivot.Position.Y
+    local currentPivot = tower:GetPivot()
+    local currentPivotY = currentPivot.Position.Y
+    local currentBottom = getTowerBottomY()
+    if not currentBottom then return false end
+    
+    -- Originele bottom = current bottom - hoeveel we al verschoven hebben
+    local alreadyMoved = currentPivotY - origPivotY
+    local originalBottomY = currentBottom - alreadyMoved
+    
+    -- Target bottom positie
     local targetBottom = floorTopY + offset
-    local deltaY = targetBottom - towerBottomY
-    if math.abs(deltaY) < 0.3 then return true end
-    local pivot = tower:GetPivot()
-    pcall(function() tower:PivotTo(pivot * CFrame.new(0, deltaY, 0)) end)
+    
+    -- Delta vanaf ORIGINEEL
+    local deltaY = targetBottom - originalBottomY
+    
+    -- Check of we al goed staan
+    if math.abs(currentBottom - targetBottom) < 0.3 then return true end
+    
+    -- Zet tower op nieuwe positie vanuit origineel
+    pcall(function()
+        tower:PivotTo(origPivot * CFrame.new(0, deltaY, 0))
+    end)
     pcall(function()
         for _, part in pairs(tower:GetDescendants()) do
             if part:IsA("BasePart") then part.Anchored = true end
@@ -2083,59 +2106,82 @@ local FCTG=FCT:AddToggle("FactoryToggle",{Title="Factory",Default=false}) FCTG:O
 
 -- ========== EVENTS TAB ==========
 local ET=W:AddTab({Title="Events",Icon="party-popper"})
-ET:AddParagraph({Title="Doom Event",Content="Coins + Tower"})
-local DMSP=ET:AddParagraph({Title="Doom Coins",Content="Uit"})
-local DMTG=ET:AddToggle("DoomToggle",{Title="Doom Coins",Default=false})
+
+-- ────────────────────────────────
+-- 🌋 DOOM EVENT
+-- ────────────────────────────────
+ET:AddParagraph({Title="🌋 Doom Event",Content="Coins verzamelen + Tower naar vloer zetten"})
+
+local DMSP=ET:AddParagraph({Title="Doom Coins Status",Content="Uit"})
+local DMTG=ET:AddToggle("DoomToggle",{Title="🪙 Auto Doom Coins",Default=false})
 DMTG:OnChanged(function(v) if v then M.startDoomCollector() else M.stopDoomCollector() end end)
 
-ET:AddParagraph({Title="Doom Tower",Content="Auto floor detect"})
-ET:AddDropdown("TowerOffset",{Title="Tower Offset",Description="0=exact op vloer",Values=TOWEROFFSET,Default="0",Multi=false}):OnChanged(function(v)
+ET:AddDropdown("TowerOffset",{Title="🗼 Tower Offset",Description="0 = exact op vloer, -5 = onder vloer",Values=TOWEROFFSET,Default="0",Multi=false}):OnChanged(function(v)
     M.S.DoomTowerOffset = tonumber(v) or 0
     if M.S.DoomTowerEnabled and M._towerDetectedFloorY then
         moveTowerToFloor(M._towerDetectedFloorY, M.S.DoomTowerOffset)
     end
 end)
+
 local DTSP=ET:AddParagraph({Title="Tower Status",Content="Uit"})
-local DTTG=ET:AddToggle("DoomTowerToggle",{Title="Tower naar Vloer",Default=false})
+local DTTG=ET:AddToggle("DoomTowerToggle",{Title="🗼 Tower naar Vloer",Default=false})
 DTTG:OnChanged(function(v) if v then M.enableTowerDrop() else M.disableTowerDrop() end end)
 
-ET:AddButton({Title="Detect Info",Callback=function()
+ET:AddButton({Title="🔍 Tower & Vloer Info",Callback=function()
     local y, source = detectFloorY()
     local tY = getTowerY()
     local bY = getTowerBottomY()
     local info = "Vloer: Y=" .. string.format("%.1f", y) .. " (" .. source .. ")"
-    if tY then info = info .. "\nTower: Y=" .. string.format("%.1f", tY) end
-    if bY then info = info .. "\nBottom: Y=" .. string.format("%.1f", bY) end
-    Fluent:Notify({Title="Detection",Content=info,Duration=8})
+    if tY then info = info .. "\nTower Pivot: Y=" .. string.format("%.1f", tY) end
+    if bY then info = info .. "\nTower Bottom: Y=" .. string.format("%.1f", bY) end
+    if M._towerOriginalCF then info = info .. "\nOrigineel: Y=" .. string.format("%.1f", M._towerOriginalCF.Position.Y) end
+    Fluent:Notify({Title="🌋 Detection",Content=info,Duration=8})
 end})
 
-ET:AddButton({Title="Doom Alles Aan",Callback=function()
+ET:AddButton({Title="⚡ Doom Alles Aan",Callback=function()
     if not M.S.DoomTowerEnabled then M.enableTowerDrop() pcall(function() DTTG:SetValue(true) end) end
     if not M.S.DoomEnabled then M.startDoomCollector() pcall(function() DMTG:SetValue(true) end) end
+    Fluent:Notify({Title="🌋 Doom",Content="Tower + Coins actief!",Duration=3})
 end})
 
-ET:AddButton({Title="Doom Alles Uit",Callback=function()
+ET:AddButton({Title="⏹ Doom Alles Uit",Callback=function()
     if M.S.DoomEnabled then M.stopDoomCollector() pcall(function() DMTG:SetValue(false) end) end
     if M.S.DoomTowerEnabled then M.disableTowerDrop() pcall(function() DTTG:SetValue(false) end) end
+    Fluent:Notify({Title="🌋 Doom",Content="Gestopt + hersteld",Duration=3})
 end})
 
-ET:AddParagraph({Title="Valentine v12.2",Content="Rent naar brainrots, bij 100 hearts submit"})
+-- ────────────────────────────────
+-- 💝 VALENTINE EVENT
+-- ────────────────────────────────
+ET:AddParagraph({Title="💝 Valentine Event",Content="Rent naar brainrots voor hearts\nBij 100 hearts → station → submit\nHerhaalt tot je het uitzet"})
+
 local VSP=ET:AddParagraph({Title="Valentine Status",Content="Idle"})
-local VTG=ET:AddToggle("ValentineToggle",{Title="Valentine",Default=false}) VTG:OnChanged(function(v) if v then M.startValentine() else M.stopValentine() end end)
-ET:AddButton({Title="Find Station",Callback=function()
+local VTG=ET:AddToggle("ValentineToggle",{Title="💝 Auto Valentine",Default=false})
+VTG:OnChanged(function(v) if v then M.startValentine() else M.stopValentine() end end)
+
+ET:AddButton({Title="💝 Zoek Station",Callback=function()
     local s = M.findValentineStation()
     if s then
         local pos = M._valentineStationCF and M._valentineStationCF.Position or Vector3.new(0,0,0)
-        Fluent:Notify({Title="Station",Content=s.Name.."\nPos: "..tostring(pos),Duration=5})
-    else Fluent:Notify({Title="Station",Content="Niet gevonden!",Duration=3}) end
-end})
-ET:AddButton({Title="Submit Nu",Callback=function()
-    local ok = M.submitAtStation()
-    Fluent:Notify({Title="Submit",Content=ok and "Done" or "Mislukt",Duration=3})
+        Fluent:Notify({Title="💝 Station",Content=s.Name.."\nPos: "..tostring(pos),Duration=5})
+    else
+        Fluent:Notify({Title="💝 Station",Content="Niet gevonden!",Duration=3})
+    end
 end})
 
-local ASP=ET:AddParagraph({Title="Arcade",Content="Idle"})
-local ATG=ET:AddToggle("ArcadeToggle",{Title="Arcade",Default=false}) ATG:OnChanged(function(v) if v then M.startArcade() else M.stopArcade() end end)
+ET:AddButton({Title="💝 Submit Nu",Callback=function()
+    local ok = M.submitAtStation()
+    Fluent:Notify({Title="💝 Submit",Content=ok and "Done" or "Mislukt",Duration=3})
+end})
+
+-- ────────────────────────────────
+-- 🕹️ ARCADE EVENT
+-- ────────────────────────────────
+ET:AddParagraph({Title="🕹️ Arcade Event",Content="Auto tickets en consoles collecten"})
+
+local ASP=ET:AddParagraph({Title="Arcade Status",Content="Idle"})
+local ATG=ET:AddToggle("ArcadeToggle",{Title="🕹️ Auto Arcade",Default=false})
+ATG:OnChanged(function(v) if v then M.startArcade() else M.stopArcade() end end)
 
 -- ========== AUTO TAB ==========
 local AT2=W:AddTab({Title="Auto",Icon="rocket"})
