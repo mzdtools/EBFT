@@ -1,9 +1,11 @@
 -- ============================================
 -- loadstring(game:HttpGet("https://raw.githubusercontent.com/mzdtools/EBFT/main/Escape"))()
 -- ============================================
--- MzD Hub v11.2 - VOLLEDIG GEOPTIMALISEERD
--- God Mode v22: Size.H bug fix + muren tot onder vloer
--- FPS fix: caching + minder frequente loops
+-- MzD Hub v12.0 - DOOM EVENT UPDATE
+-- God Mode v23: Dynamische tower + doom collector
+-- Muren W=420 (portals bereikbaar)
+-- Doom Event: auto coin collect
+-- Epic rarity + Doom mutation support
 -- ============================================
 getgenv().MzD = {}
 local M = getgenv().MzD
@@ -62,6 +64,9 @@ M.S = {
 	GodEnabled = false,
 	GodWalkY = -2,
 	GodFloorY = -5,
+	DoomEnabled = false,
+	DoomTowerEnabled = false,
+	DoomTowerOffset = 0,
 }
 
 M.Status = {
@@ -76,6 +81,8 @@ M.Status = {
 	mapFixer = "Uit",
 	luckyBlock = "Idle", luckyBlockCount = 0,
 	god = "Uit",
+	doom = "Uit", doomCount = 0,
+	doomTower = "Uit",
 }
 
 -- ========== STATE ==========
@@ -104,7 +111,7 @@ M._valentineFoundRemotes = {}
 M._valentineDebugLog = {}
 M.luckyBlockThread = nil
 
--- God Mode v22 state
+-- God Mode v23 state
 M._isGod = false
 M._godLoopThread = nil
 M._godHealthConn = nil
@@ -115,8 +122,25 @@ M._godKillParts = {}
 M._godKillWatchThread = nil
 M._godFloorCacheTime = 0
 
-M._wallZ_front = 173
-M._wallZ_back = -173
+-- Tower Mover state
+M._towerMoved = false
+M._towerOriginalCF = nil
+M._towerOriginalY = nil
+M._towerWatchThread = nil
+M._towerLastTargetY = nil
+M._towerDetectedFloorY = nil
+M._towerDetectedSource = nil
+
+-- Doom Collector state
+M._doomConn = nil
+M._doomDescConn = nil
+M._doomTowerDescConn = nil
+M._doomCachedParts = {}
+M._doomLastScan = 0
+M._doomCollected = 0
+
+M._wallZ_front = 207
+M._wallZ_back = -207
 
 local HIGH_RARITIES = {["Celestial"] = true, ["Divine"] = true, ["Infinity"] = true}
 
@@ -136,7 +160,442 @@ local function isMzDPart(obj)
 end
 
 -- ============================================
--- GOD MODE v22 - SIZE.H BUG FIX
+-- TOWER MOVER - Dynamisch op basis van vloer
+-- ============================================
+local function findTower()
+	local ok, tower = pcall(function()
+		return workspace.GameObjects.PlaceSpecific.root.Tower
+	end)
+	if ok and tower then return tower end
+
+	for _, c in pairs(workspace:GetDescendants()) do
+		if c.Name == "Tower" and c:IsA("Model") then
+			local count = 0
+			for _, d in pairs(c:GetDescendants()) do
+				if d:IsA("BasePart") then count += 1 end
+				if count > 5 then return c end
+			end
+		end
+	end
+	return nil
+end
+
+local function getTowerY()
+	local tower = findTower()
+	if not tower then return nil end
+	local ok, pivot = pcall(function() return tower:GetPivot() end)
+	if ok and pivot then return pivot.Position.Y end
+	return nil
+end
+
+local function getTowerBottomY()
+	local tower = findTower()
+	if not tower then return nil end
+	local minY = math.huge
+	for _, part in pairs(tower:GetDescendants()) do
+		if part:IsA("BasePart") then
+			local bottom = part.Position.Y - part.Size.Y / 2
+			if bottom < minY then minY = bottom end
+		end
+	end
+	if minY == math.huge then return nil end
+	return minY
+end
+
+local function detectFloorY()
+	local floors = {}
+
+	-- Methode 1: God mode vloer
+	for _, c in pairs(workspace:GetChildren()) do
+		if c:IsA("BasePart") and c.Name == "MzDGodFloor" then
+			table.insert(floors, {y = c.Position.Y + c.Size.Y / 2, source = "GodFloor"})
+		end
+	end
+
+	-- Methode 2: Map vloeren
+	local map = nil
+	for _, c in pairs(workspace:GetChildren()) do
+		if c:IsA("Model") and c.Name:find("Map") and not c.Name:find("SharedInstances") then
+			if c:FindFirstChild("Spawners") or c:FindFirstChild("Gaps") or
+				c:FindFirstChild("FirstFloor") or c:FindFirstChild("Ground") then
+				map = c break
+			end
+			local cnt = 0
+			for _, d in pairs(c:GetDescendants()) do
+				if d:IsA("BasePart") then cnt += 1 end
+				if cnt > 10 then map = c break end
+			end
+			if map then break end
+		end
+	end
+
+	if map then
+		for _, name in pairs({"FirstFloor", "Ground", "Floor", "BridgeFloor"}) do
+			local f = map:FindFirstChild(name)
+			if f and f:IsA("BasePart") then
+				table.insert(floors, {y = f.Position.Y + f.Size.Y / 2, source = "Map:" .. name})
+			end
+		end
+
+		local sp = map:FindFirstChild("Spawners")
+		if sp then
+			for _, s in pairs(sp:GetChildren()) do
+				if s:IsA("BasePart") and s.Size.X > 15 and s.Size.Z > 5 and s.Size.Y < 20 then
+					if s.Position.Y > -15 and s.Position.Y < 30 then
+						table.insert(floors, {y = s.Position.Y + s.Size.Y / 2, source = "Spawner"})
+					end
+				end
+			end
+		end
+
+		for _, c in pairs(map:GetChildren()) do
+			if c:IsA("BasePart") and not isMzDPart(c) and c.Size.X > 30 and c.Size.Z > 15 and c.Size.Y < 15 then
+				if c.Position.Y > -15 and c.Position.Y < 30 then
+					table.insert(floors, {y = c.Position.Y + c.Size.Y / 2, source = "MapPart"})
+				end
+			end
+		end
+	end
+
+	-- Methode 3: SharedInstances
+	for _, c in pairs(workspace:GetChildren()) do
+		if c.Name:find("SharedInstances") then
+			local fl = c:FindFirstChild("Floors")
+			if fl then
+				for _, f in pairs(fl:GetChildren()) do
+					if f:IsA("BasePart") and f.Size.X > 15 and f.Size.Z > 5 then
+						table.insert(floors, {y = f.Position.Y + f.Size.Y / 2, source = "Shared"})
+					end
+				end
+			end
+		end
+	end
+
+	-- Methode 4: Raycast
+	local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+	if hrp then
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		local excludeList = {}
+		local tower = findTower()
+		if tower then table.insert(excludeList, tower) end
+		params.FilterDescendantsInstances = excludeList
+
+		local result = workspace:Raycast(hrp.Position, Vector3.new(0, -100, 0), params)
+		if result then
+			table.insert(floors, {y = result.Position.Y, source = "Raycast"})
+		end
+	end
+
+	if #floors == 0 then
+		if hrp then return hrp.Position.Y - 3, "PlayerFallback" end
+		return 0, "Default"
+	end
+
+	table.sort(floors, function(a, b) return a.y > b.y end)
+	local best = floors[1]
+	return best.y, best.source
+end
+
+local function moveTowerToFloor(floorTopY, offset)
+	local tower = findTower()
+	if not tower then return false end
+
+	if not M._towerOriginalCF then
+		pcall(function()
+			M._towerOriginalCF = tower:GetPivot()
+			M._towerOriginalY = M._towerOriginalCF.Position.Y
+		end)
+	end
+
+	local towerBottomY = getTowerBottomY()
+	if not towerBottomY then return false end
+
+	local targetBottom = floorTopY + offset
+	local deltaY = targetBottom - towerBottomY
+
+	if math.abs(deltaY) < 0.3 then return true end
+
+	local pivot = tower:GetPivot()
+	pcall(function()
+		tower:PivotTo(pivot * CFrame.new(0, deltaY, 0))
+	end)
+
+	pcall(function()
+		for _, part in pairs(tower:GetDescendants()) do
+			if part:IsA("BasePart") then part.Anchored = true end
+		end
+	end)
+
+	M._towerMoved = true
+	M._towerLastTargetY = targetBottom
+	M._towerDetectedFloorY = floorTopY
+	print("[Tower] Bottom: " .. string.format("%.1f", towerBottomY) .. " → " .. string.format("%.1f", targetBottom) .. " (floor:" .. string.format("%.1f", floorTopY) .. " offset:" .. offset .. ")")
+	return true
+end
+
+local function restoreTower()
+	if not M._towerOriginalCF then return false end
+	local tower = findTower()
+	if not tower then return false end
+	pcall(function() tower:PivotTo(M._towerOriginalCF) end)
+	M._towerMoved = false
+	M._towerOriginalCF = nil
+	M._towerOriginalY = nil
+	M._towerLastTargetY = nil
+	print("[Tower] Hersteld")
+	return true
+end
+
+local function startTowerWatcher()
+	if M._towerWatchThread then pcall(task.cancel, M._towerWatchThread) end
+	M._towerWatchThread = task.spawn(function()
+		while M.S.DoomTowerEnabled and M._towerMoved do
+			pcall(function()
+				local tower = findTower()
+				if tower and M._towerLastTargetY then
+					local bottomY = getTowerBottomY()
+					if bottomY and math.abs(bottomY - M._towerLastTargetY) > 3 then
+						print("[Tower] Reset gedetecteerd, opnieuw plaatsen...")
+						local floorY = M._towerDetectedFloorY or detectFloorY()
+						moveTowerToFloor(floorY, M.S.DoomTowerOffset)
+					end
+					for _, part in pairs(tower:GetDescendants()) do
+						if part:IsA("BasePart") then part.Anchored = true end
+					end
+				end
+			end)
+			task.wait(3)
+		end
+	end)
+end
+
+local function stopTowerWatcher()
+	if M._towerWatchThread then
+		pcall(task.cancel, M._towerWatchThread)
+		M._towerWatchThread = nil
+	end
+end
+
+function M.enableTowerDrop()
+	M.S.DoomTowerEnabled = true
+
+	local floorY, source = detectFloorY()
+	M._towerDetectedFloorY = floorY
+	M._towerDetectedSource = source
+	print("[Tower] Vloer: Y=" .. string.format("%.1f", floorY) .. " (" .. source .. ")")
+
+	local ok = moveTowerToFloor(floorY, M.S.DoomTowerOffset)
+	if ok then
+		startTowerWatcher()
+		M.Status.doomTower = "Aan ✓ (floor:" .. string.format("%.0f", floorY) .. " off:" .. M.S.DoomTowerOffset .. ")"
+		print("[Tower] Verplaatst ✓")
+	else
+		M.Status.doomTower = "Tower niet gevonden"
+		print("[Tower] Niet gevonden!")
+	end
+	return ok
+end
+
+function M.disableTowerDrop()
+	M.S.DoomTowerEnabled = false
+	stopTowerWatcher()
+	restoreTower()
+	M._towerMoved = false
+	M.Status.doomTower = "Uit"
+end
+
+-- ============================================
+-- DOOM EVENT COLLECTOR
+-- ============================================
+local function scanDoomParts()
+	M._doomCachedParts = {}
+
+	local folder = workspace:FindFirstChild("DoomEventParts")
+	if folder then
+		for _, obj in pairs(folder:GetDescendants()) do
+			if obj:IsA("BasePart") then
+				table.insert(M._doomCachedParts, obj)
+			end
+			if obj:IsA("ProximityPrompt") then
+				pcall(function()
+					obj.HoldDuration = 0
+					obj.MaxActivationDistance = 99999
+					obj.RequiresLineOfSight = false
+				end)
+			end
+		end
+	end
+
+	local tower = findTower()
+	if tower then
+		for _, obj in pairs(tower:GetDescendants()) do
+			if obj:IsA("BasePart") and obj:FindFirstChild("TouchInterest") then
+				local found = false
+				for _, c in pairs(M._doomCachedParts) do
+					if c == obj then found = true break end
+				end
+				if not found then table.insert(M._doomCachedParts, obj) end
+			end
+			if obj:IsA("ProximityPrompt") then
+				pcall(function()
+					obj.HoldDuration = 0
+					obj.MaxActivationDistance = 99999
+					obj.RequiresLineOfSight = false
+				end)
+			end
+		end
+	end
+
+	M._doomLastScan = tick()
+	return #M._doomCachedParts
+end
+
+local function fireAllDoomPrompts(parent)
+	if not parent then return end
+	for _, d in pairs(parent:GetDescendants()) do
+		if d:IsA("ProximityPrompt") then
+			pcall(function()
+				d.HoldDuration = 0
+				d.MaxActivationDistance = 99999
+				d.RequiresLineOfSight = false
+			end)
+			pcall(function() fireproximityprompt(d) end)
+		end
+	end
+end
+
+local function handleDoomNewDesc(d)
+	if not M.S.DoomEnabled then return end
+	if d:IsA("BasePart") then
+		table.insert(M._doomCachedParts, d)
+		pcall(function()
+			local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+			if hrp then
+				firetouchinterest(hrp, d, 0)
+				firetouchinterest(hrp, d, 1)
+			end
+		end)
+	end
+	if d:IsA("ProximityPrompt") then
+		pcall(function()
+			d.HoldDuration = 0
+			d.MaxActivationDistance = 99999
+			d.RequiresLineOfSight = false
+		end)
+		pcall(function() fireproximityprompt(d) end)
+	end
+end
+
+function M.startDoomCollector()
+	if M.S.DoomEnabled then return end
+	M.S.DoomEnabled = true
+	M._doomCollected = 0
+	M.Status.doomCount = 0
+
+	local partCount = scanDoomParts()
+	print("[Doom] Start | " .. partCount .. " parts")
+
+	local folder = workspace:FindFirstChild("DoomEventParts")
+	if not folder then
+		task.spawn(function()
+			folder = workspace:WaitForChild("DoomEventParts", 30)
+			if folder and M.S.DoomEnabled then
+				scanDoomParts()
+				M._doomDescConn = folder.DescendantAdded:Connect(handleDoomNewDesc)
+			end
+		end)
+	else
+		if M._doomDescConn then pcall(function() M._doomDescConn:Disconnect() end) end
+		M._doomDescConn = folder.DescendantAdded:Connect(handleDoomNewDesc)
+	end
+
+	local tower = findTower()
+	if tower then
+		if M._doomTowerDescConn then pcall(function() M._doomTowerDescConn:Disconnect() end) end
+		M._doomTowerDescConn = tower.DescendantAdded:Connect(handleDoomNewDesc)
+	end
+
+	M._doomConn = RunService.Heartbeat:Connect(function()
+		if not M.S.DoomEnabled then return end
+		pcall(function()
+			local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+			if not hrp then return end
+
+			if tick() - M._doomLastScan > 10 then
+				local alive = {}
+				for _, p in pairs(M._doomCachedParts) do
+					if p and p.Parent then table.insert(alive, p) end
+				end
+				M._doomCachedParts = alive
+
+				local folder2 = workspace:FindFirstChild("DoomEventParts")
+				if folder2 then
+					for _, obj in pairs(folder2:GetDescendants()) do
+						if obj:IsA("BasePart") then
+							local found = false
+							for _, cached in pairs(M._doomCachedParts) do
+								if cached == obj then found = true break end
+							end
+							if not found then table.insert(M._doomCachedParts, obj) end
+						end
+					end
+				end
+
+				local tw = findTower()
+				if tw then
+					for _, obj in pairs(tw:GetDescendants()) do
+						if obj:IsA("BasePart") and obj:FindFirstChild("TouchInterest") then
+							local found = false
+							for _, cached in pairs(M._doomCachedParts) do
+								if cached == obj then found = true break end
+							end
+							if not found then table.insert(M._doomCachedParts, obj) end
+						end
+					end
+				end
+
+				M._doomLastScan = tick()
+			end
+
+			local collected = 0
+			for _, p in pairs(M._doomCachedParts) do
+				if p and p.Parent then
+					pcall(function()
+						firetouchinterest(hrp, p, 0)
+						firetouchinterest(hrp, p, 1)
+					end)
+					collected += 1
+				end
+			end
+
+			local folder3 = workspace:FindFirstChild("DoomEventParts")
+			if folder3 then fireAllDoomPrompts(folder3) end
+			local tw2 = findTower()
+			if tw2 then fireAllDoomPrompts(tw2) end
+
+			M._doomCollected = collected
+		end)
+	end)
+
+	M.Status.doom = "Aan ✓ (" .. partCount .. " parts)"
+	print("[Doom] Collector AAN ✓")
+end
+
+function M.stopDoomCollector()
+	M.S.DoomEnabled = false
+	if M._doomConn then pcall(function() M._doomConn:Disconnect() end) M._doomConn = nil end
+	if M._doomDescConn then pcall(function() M._doomDescConn:Disconnect() end) M._doomDescConn = nil end
+	if M._doomTowerDescConn then pcall(function() M._doomTowerDescConn:Disconnect() end) M._doomTowerDescConn = nil end
+	M._doomCachedParts = {}
+	M._doomCollected = 0
+	M.Status.doom = "Uit"
+	M.Status.doomCount = 0
+	print("[Doom] Collector UIT")
+end
+
+-- ============================================
+-- GOD MODE v23
 -- ============================================
 
 local function godFindFloorParts()
@@ -233,12 +692,10 @@ local function godDetectMapXRange(map)
 	return -50, 4500
 end
 
--- v22 FIX: c.Size.H → c.Size.Y (H bestaat niet!)
 local function godFindAllKillParts()
 	local kills, seen = {}, {}
 	for _, c in pairs(workspace:GetDescendants()) do
 		if c:IsA("BasePart") and not seen[c] and not isMzDPart(c) then
-			-- Detecteer dunne kill strips (Y < 1, Z > 50, X < 5)
 			local ok, isKillStrip = pcall(function()
 				return c.Size.Y < 1 and c.Size.Z > 50 and c.Position.Y < 5 and c.Position.Y > -5 and c.Size.X < 5
 			end)
@@ -246,7 +703,6 @@ local function godFindAllKillParts()
 				seen[c] = true
 				table.insert(kills, c)
 			end
-			-- Detecteer op naam
 			if not seen[c] then
 				local n = c.Name:lower()
 				if n:find("kill") or n:find("tsunamikill") or n:find("deathzone") or
@@ -294,7 +750,6 @@ local function godStartKillWatcher()
 	M._godKillWatchThread = task.spawn(function()
 		while M._isGod do
 			pcall(function()
-				-- Bestaande kill parts blijven uitgeschakeld
 				for _, data in pairs(M._godKillParts) do
 					if data.part and data.part.Parent then
 						data.part.CanCollide = false data.part.CanTouch = false
@@ -302,7 +757,6 @@ local function godStartKillWatcher()
 					end
 				end
 			end)
-			-- Scan voor nieuwe kill parts
 			pcall(function()
 				for _, c in pairs(workspace:GetDescendants()) do
 					if c:IsA("BasePart") and not isMzDPart(c) then
@@ -339,7 +793,6 @@ local function godStartKillWatcher()
 end
 
 local function godBuildEgaleVloer(map)
-	-- Cleanup oude god parts
 	for _, p in pairs(M._godCreatedParts) do
 		pcall(function() if p and p.Parent then p:Destroy() end end)
 	end
@@ -347,16 +800,13 @@ local function godBuildEgaleVloer(map)
 
 	local startX, endX = godDetectMapXRange(map)
 	local floorY = M.S.GodFloorY
-	local floorWidth = 400
+	local floorWidth = 420
 	local floorThickness = 4
 	local BLK = Color3.fromRGB(0, 0, 0)
 	local GLD = Color3.fromRGB(255, 200, 50)
 
-	print("[MzD God] Bouw vloer: X=" .. startX .. " tot " .. endX .. " Y=" .. floorY)
-
 	local maxSeg = 2000
 	local curX = startX
-	local partCount = 0
 	while curX < endX do
 		local segLen = math.min(maxSeg, endX - curX)
 		local centerX = curX + segLen / 2
@@ -371,7 +821,6 @@ local function godBuildEgaleVloer(map)
 		floor.TopSurface = Enum.SurfaceType.Smooth floor.BottomSurface = Enum.SurfaceType.Smooth
 		floor.Parent = workspace
 		table.insert(M._godCreatedParts, floor)
-		partCount += 1
 
 		local topY = floorY + floorThickness / 2 + 0.1
 		for _, zPos in pairs({floorWidth / 2 - 5, -floorWidth / 2 + 5}) do
@@ -394,7 +843,6 @@ local function godBuildEgaleVloer(map)
 		curX = curX + segLen
 	end
 
-	-- Catch floor
 	local catch = Instance.new("Part")
 	catch.Name = "MzDGodCatchFloor"
 	catch.Size = Vector3.new(math.abs(endX - startX) + 200, 2, floorWidth + 100)
@@ -403,15 +851,12 @@ local function godBuildEgaleVloer(map)
 	catch.Parent = workspace
 	table.insert(M._godCreatedParts, catch)
 
-	print("[MzD God] Vloer gebouwd: " .. partCount .. " segments, " .. #M._godCreatedParts .. " parts totaal")
 	return true
 end
 
 local function godHideOriginalFloors()
 	local floors, map = godFindFloorParts()
 	M._godOriginalFloors = {}
-
-	print("[MzD God] Gevonden vloeren: " .. #floors .. " | Map: " .. (map and map.Name or "GEEN"))
 
 	for _, p in pairs(floors) do
 		table.insert(M._godOriginalFloors, {
@@ -472,7 +917,6 @@ local function godStartLoop()
 				if not ch then return end
 				local hrp = ch:FindFirstChild("HumanoidRootPart")
 
-				-- Vloeren cache: elke 5 seconden
 				if tick() - M._godFloorCacheTime > 5 then
 					for _, data in pairs(M._godOriginalFloors) do
 						if data.part and data.part.Parent then
@@ -483,7 +927,6 @@ local function godStartLoop()
 					M._godFloorCacheTime = tick()
 				end
 
-				-- Y-positie bewaken
 				if hrp then
 					local curY = hrp.Position.Y
 					local targetY = M.S.GodWalkY
@@ -537,36 +980,32 @@ function M.enableGod()
 	M.Status.god = "Starten..."
 	M._godFloorCacheTime = 0
 
-	print("[MzD God] Starten...")
-
-	-- Stap 1: Kill parts
 	local killCount = godDisableKillParts()
 	godStartKillWatcher()
-	print("[MzD God] Kill parts: " .. killCount)
 	task.wait(0.1)
 
-	-- Stap 2: Verberg originele vloeren
 	local map = godHideOriginalFloors()
-	print("[MzD God] Vloeren verborgen: " .. #M._godOriginalFloors)
 	task.wait(0.1)
 
-	-- Stap 3: Bouw god vloer
-	local buildOk = godBuildEgaleVloer(map)
-	print("[MzD God] Vloer gebouwd: " .. tostring(buildOk) .. " | Parts: " .. #M._godCreatedParts)
+	godBuildEgaleVloer(map)
 	task.wait(0.2)
 
-	-- Stap 4: Start loop
 	godStartLoop()
 	task.wait(0.1)
 
-	-- Stap 5: Teleport
 	godTeleportUnder()
 	task.wait(0.1)
 
-	-- Stap 6: Health
 	if Player.Character then godSetupHealth(Player.Character) end
 
-	M.Status.god = "Aan 🛡️ (Y=" .. M.S.GodWalkY .. " | Kill:" .. killCount .. " | Vloer:" .. #M._godCreatedParts .. ")"
+	-- Auto tower drop als doom tower enabled
+	local towerStatus = ""
+	if M.S.DoomTowerEnabled then
+		local tOk = M.enableTowerDrop()
+		towerStatus = tOk and " | Tower ✓" or " | Tower ✗"
+	end
+
+	M.Status.god = "Aan 🛡️ (Y=" .. M.S.GodWalkY .. " K:" .. killCount .. " V:" .. #M._godCreatedParts .. towerStatus .. ")"
 	print("[MzD God] ACTIEF ✓")
 end
 
@@ -601,7 +1040,6 @@ function M.disableGod()
 	end
 
 	M.Status.god = "Uit"
-	print("[MzD God] Uitgeschakeld")
 end
 
 -- ========== EQUIP ==========
@@ -694,6 +1132,11 @@ Player.CharacterAdded:Connect(function(character)
 			end
 		end)
 		task.wait(0.3) godTeleportUnder()
+		-- Tower opnieuw na respawn
+		if M.S.DoomTowerEnabled and M._towerDetectedFloorY then
+			task.wait(0.5)
+			moveTowerToFloor(M._towerDetectedFloorY, M.S.DoomTowerOffset)
+		end
 		M.Status.god = "Respawn ✓ (Y=" .. M.S.GodWalkY .. ")"
 	end
 end)
@@ -862,6 +1305,64 @@ function M.toolMatchesRarity(tool, targetRarity, targetMutation)
 		else local wl = {} for _, r in pairs(tR) do for _, n in pairs(M.getBrainrotNames(r)) do wl[n] = true end end if not wl[bName] then return false end end
 	end
 	return true
+end
+
+-- ========== DETECT MUTATIONS DYNAMICALLY ==========
+function M.getAvailableMutations()
+	local muts = {"Any", "None"}
+	local seen = {["Any"] = true, ["None"] = true}
+
+	-- Scan ReplicatedStorage.Assets.Mutations
+	pcall(function()
+		local mutFolder = game:GetService("ReplicatedStorage"):FindFirstChild("Assets")
+		if mutFolder then
+			mutFolder = mutFolder:FindFirstChild("Mutations")
+			if mutFolder then
+				for _, m in pairs(mutFolder:GetChildren()) do
+					if not seen[m.Name] then
+						seen[m.Name] = true
+						table.insert(muts, m.Name)
+					end
+				end
+			end
+		end
+	end)
+
+	-- Fallback hardcoded
+	for _, m in pairs({"Emerald", "Gold", "Blood", "Diamond", "Rainbow", "Shadow", "Crystal", "Void", "Doom"}) do
+		if not seen[m] then
+			seen[m] = true
+			table.insert(muts, m)
+		end
+	end
+
+	return muts
+end
+
+-- ========== DETECT RARITIES DYNAMICALLY ==========
+function M.getAvailableRarities()
+	local rars = {}
+	local seen = {}
+
+	-- Hardcoded base + scan ActiveBrainrots
+	local base = {"Any", "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythical", "Cosmic", "Secret", "Celestial", "Divine", "Infinity"}
+	for _, r in pairs(base) do
+		if not seen[r] then seen[r] = true table.insert(rars, r) end
+	end
+
+	-- Scan ActiveBrainrots voor nieuwe rarities
+	pcall(function()
+		if M.ActiveBrainrots then
+			for _, f in pairs(M.ActiveBrainrots:GetChildren()) do
+				if f:IsA("Folder") and not seen[f.Name] then
+					seen[f.Name] = true
+					table.insert(rars, f.Name)
+				end
+			end
+		end
+	end)
+
+	return rars
 end
 
 -- ========== FACTORY ==========
@@ -1164,13 +1665,14 @@ function M.startArcade() if M.arcadeThread then return end M.S.ArcadeEnabled = t
 function M.stopArcade() M.S.ArcadeEnabled = false if M.arcadeThread then pcall(task.cancel, M.arcadeThread) M.arcadeThread = nil end M.Status.arcade = "Idle" end
 
 -- ========== MAP FIXER ==========
-local MF = {W=350,WH=80,WT=6,INT=8,BLK=Color3.fromRGB(0,0,0),GLD=Color3.fromRGB(255,200,50),GLW=Color3.fromRGB(255,215,0)}
+-- W=420 zodat portals (Z~-183) binnen de muren vallen
+local MF = {W=420,WH=80,WT=6,INT=8,BLK=Color3.fromRGB(0,0,0),GLD=Color3.fromRGB(255,200,50),GLW=Color3.fromRGB(255,215,0)}
 MF.SZ=MF.W/2
 MF.WY = MF.WH/2 - 10
 
 local function safeDestroyFolder(parent, fn) if not parent then return end local f = parent:FindFirstChild(fn) if not f or f.Name == "MzDHubWalls" then return end pcall(function() for _, d in pairs(f:GetDescendants()) do if d:IsA("BasePart") then d:Destroy() end end f:Destroy() end) end
 local MAP_FOLDERS_REMOVE = {"RightWalls","LeftWalls","Gaps","VIPWalls","SideWalls","Barriers","Fences","Walls","Decorations"}
-local EVENT_MAPS = {"ValentinesMap","ArcadeMap","CandyMap","HalloweenMap","ChristmasMap","EasterMap","SummerMap","SpringMap","WinterMap"}
+local EVENT_MAPS = {"ValentinesMap","ArcadeMap","CandyMap","HalloweenMap","ChristmasMap","EasterMap","SummerMap","SpringMap","WinterMap","DoomMap"}
 
 local function isWallPart(p) if not p:IsA("BasePart") then return false end if isMzDPart(p) then return false end local n = p.Name:lower() for _, k in pairs({"vipwall","sidewall","barrier","fence","blocker","border"}) do if n == k or n:find("^"..k) then return true end end if p.Size.Y > 15 and p.Size.Y > p.Size.X*3 and p.Size.Y > p.Size.Z*3 then if math.abs(p.Position.Z) > 60 then return true end end return false end
 
@@ -1244,7 +1746,7 @@ function M.mapBuildWalls(map, sx, ex)
 		local t = Instance.new("TextLabel") t.Size = UDim2.new(1,0,0.5,0) t.Position = UDim2.new(0,0,0.1,0)
 		t.BackgroundTransparency = 1 t.Text = "MzD Hub" t.TextColor3 = MF.GLW t.TextScaled = true t.Font = Enum.Font.GothamBold t.Parent = sg
 		local s2 = Instance.new("TextLabel") s2.Size = UDim2.new(0.6,0,0.2,0) s2.Position = UDim2.new(0.2,0,0.6,0)
-		s2.BackgroundTransparency = 1 s2.Text = "v11.2" s2.TextColor3 = Color3.fromRGB(200,200,200) s2.TextScaled = true s2.Font = Enum.Font.Gotham s2.Parent = sg
+		s2.BackgroundTransparency = 1 s2.Text = "v12.0" s2.TextColor3 = Color3.fromRGB(200,200,200) s2.TextScaled = true s2.Font = Enum.Font.Gotham s2.Parent = sg
 	end
 
 	local segs = {} local sl = 2000 local p = sx
@@ -1309,6 +1811,12 @@ function M.mapRunFix()
 		pcall(function() M.mapFillGaps(map, sx, ex) end)
 		pcall(function() M.mapBuildWalls(map, sx, ex) end)
 		M.Status.mapFixer = "Gefixed: " .. map.Name
+
+		-- Auto tower drop bij map change als enabled
+		if M.S.DoomTowerEnabled then
+			task.wait(0.5)
+			M.enableTowerDrop()
+		end
 	end
 
 	pcall(function() M.mapFixCollision(map, si) end)
@@ -1328,7 +1836,7 @@ function M.startMapFixer()
 end
 function M.stopMapFixer() M.S.MapFixerEnabled = false if M.mapFixerThread then pcall(task.cancel, M.mapFixerThread) M.mapFixerThread = nil end M.Status.mapFixer = "Uit" end
 
-print("[MzD Hub] Core v11.2 Geladen")
+print("[MzD Hub] Core v12.0 Geladen - Doom Event Update")
 
 -- ============================================
 -- GUI
@@ -1340,20 +1848,24 @@ local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/
 local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
 local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
 
-local RAR={"Any","Common","Uncommon","Rare","Epic","Legendary","Mythical","Cosmic","Secret","Celestial","Divine","Infinity"}
-local MUT={"Any","None","Emerald","Gold","Blood","Diamond","Rainbow","Shadow","Crystal","Void"}
-local FM={"Collect","Collect, Place & Max"} local FR=RAR
+-- Dynamic lists
+local RAR = M.getAvailableRarities()
+local MUT = M.getAvailableMutations()
+local FM={"Collect","Collect, Place & Max"}
+local FR = RAR
 local LBR={"Any","Common","Uncommon","Rare","Epic","Legendary","Mythical","Cosmic","Secret","Celestial","Divine","Infinity","Admin","UFO","Candy","Money"}
 local SL={} for i=1,40 do table.insert(SL,tostring(i)) end
 local SPD={"200","400","600","800","1000","1500","2000","3000","4000","INSTANT"}
 local SPM={["200"]=200,["400"]=400,["600"]=600,["800"]=800,["1000"]=1000,["1500"]=1500,["2000"]=2000,["3000"]=3000,["4000"]=4000,["INSTANT"]=9999}
 local CSPD={"100","200","300","400","500","600","800","1000","1500","2000"}
 local GODWALKY={"0","-1","-2","-3","-5","-8","-10","-15"} local GODFLOORY={"-3","-5","-8","-10","-15","-20"}
+local TOWEROFFSET = {"-5","-3","-2","-1","0","1","2","3","5"}
 
-local W = Fluent:CreateWindow({Title="MzD Hub",SubTitle="v11.2",TabWidth=160,Size=UDim2.fromOffset(600,500),Acrylic=true,Theme="Dark",MinimizeKey=Enum.KeyCode.RightControl})
+local W = Fluent:CreateWindow({Title="MzD Hub",SubTitle="v12.0 Doom",TabWidth=160,Size=UDim2.fromOffset(620,520),Acrylic=true,Theme="Dark",MinimizeKey=Enum.KeyCode.RightControl})
 
+-- ========== FARM TAB ==========
 local FT=W:AddTab({Title="Farm",Icon="swords"})
-FT:AddParagraph({Title="🌾 Filters",Content="Celestial/Divine/Infinity negeert filters"})
+FT:AddParagraph({Title="🌾 Filters",Content="Celestial/Divine/Infinity negeert filters\nRarities & Mutations worden dynamisch gedetecteerd"})
 local BDD=nil
 local RDD=FT:AddDropdown("FarmRarity",{Title="Rarity",Values=RAR,Default={"Common"},Multi=true})
 RDD:OnChanged(function(v) local s={} for n,on in pairs(v) do if on then table.insert(s,n) end end if #s==0 then s={"Common"} end local any=false for _,r in pairs(s) do if r=="Any" then any=true break end end M.S.TargetRarity=any and "Any" or s M.S.SelectedBrainrots={} pcall(function() BDD:SetValues(M.getBrainrotNamesMulti(M.S.TargetRarity)) BDD:SetValue({}) end) end)
@@ -1373,6 +1885,7 @@ FT:AddDropdown("LBMutation",{Title="Mutatie",Values=MUT,Default="Any",Multi=fals
 local LBSP=FT:AddParagraph({Title="LB Status",Content="Idle"})
 local LBTG=FT:AddToggle("LBToggle",{Title="🎲 Auto LB",Default=false}) LBTG:OnChanged(function(v) if v then M.findBase() M.startLuckyBlockFarm() else M.stopLuckyBlockFarm() end end)
 
+-- ========== FACTORY TAB ==========
 local FCT=W:AddTab({Title="Factory",Icon="hammer"})
 FCT:AddDropdown("FactoryRarity",{Title="Rarity",Values=FR,Default=M.S.FactoryRarity,Multi=false}):OnChanged(function(v) M.S.FactoryRarity=v end)
 FCT:AddDropdown("FactoryMutation",{Title="Mutatie",Values=MUT,Default=M.S.FactoryMutation,Multi=false}):OnChanged(function(v) M.S.FactoryMutation=v end)
@@ -1381,12 +1894,64 @@ FCT:AddSlider("FactoryMaxLevel",{Title="Max Level",Default=M.S.FactoryMaxLevel,M
 local FCSP=FCT:AddParagraph({Title="Status",Content="Idle"})
 local FCTG=FCT:AddToggle("FactoryToggle",{Title="🔁 Factory",Default=false}) FCTG:OnChanged(function(v) if v then M.findBase() M.startFactoryLoop() else M.stopFactoryLoop() end end)
 
+-- ========== EVENTS TAB ==========
 local ET=W:AddTab({Title="Events",Icon="party-popper"})
+
+-- Doom Event Section
+ET:AddParagraph({Title="🔥 Doom Event",Content="Auto coin collect + Tower naar vloer\nCoins uit workspace.DoomEventParts"})
+local DMSP=ET:AddParagraph({Title="🪙 Doom Coins",Content="Uit"})
+local DMTG=ET:AddToggle("DoomToggle",{Title="🪙 Doom Coin Collector",Default=false})
+DMTG:OnChanged(function(v) if v then M.startDoomCollector() else M.stopDoomCollector() end end)
+
+ET:AddParagraph({Title="🗼 Doom Tower",Content="Detecteert vloer automatisch en zet tower erop"})
+ET:AddDropdown("TowerOffset",{Title="Tower Offset",Description="Fijnregeling t.o.v. vloer (0=exact)",Values=TOWEROFFSET,Default="0",Multi=false}):OnChanged(function(v)
+	M.S.DoomTowerOffset = tonumber(v) or 0
+	if M.S.DoomTowerEnabled and M._towerDetectedFloorY then
+		moveTowerToFloor(M._towerDetectedFloorY, M.S.DoomTowerOffset)
+	end
+end)
+local DTSP=ET:AddParagraph({Title="Tower Status",Content="Uit"})
+local DTTG=ET:AddToggle("DoomTowerToggle",{Title="🗼 Tower → Vloer",Default=false})
+DTTG:OnChanged(function(v) if v then M.enableTowerDrop() else M.disableTowerDrop() end end)
+
+ET:AddButton({Title="🔍 Detect Vloer",Callback=function()
+	local y, source = detectFloorY()
+	local towerY = getTowerY()
+	local bottomY = getTowerBottomY()
+	local info = "Vloer: Y=" .. string.format("%.1f", y) .. " (" .. source .. ")"
+	if towerY then info = info .. "\nTower pivot: Y=" .. string.format("%.1f", towerY) end
+	if bottomY then info = info .. "\nTower bottom: Y=" .. string.format("%.1f", bottomY) end
+	info = info .. "\nTower gevonden: " .. tostring(findTower() ~= nil)
+	Fluent:Notify({Title="Floor Detection",Content=info,Duration=8})
+end})
+
+ET:AddButton({Title="⚡ Doom Alles Aan",Description="Tower + Coins in één klik",Callback=function()
+	if not M.S.DoomTowerEnabled then
+		M.enableTowerDrop()
+		pcall(function() DTTG:SetValue(true) end)
+	end
+	if not M.S.DoomEnabled then
+		M.startDoomCollector()
+		pcall(function() DMTG:SetValue(true) end)
+	end
+	Fluent:Notify({Title="Doom",Content="Tower + Coins actief!",Duration=3})
+end})
+
+ET:AddButton({Title="⏹ Doom Alles Uit",Callback=function()
+	if M.S.DoomEnabled then M.stopDoomCollector() pcall(function() DMTG:SetValue(false) end) end
+	if M.S.DoomTowerEnabled then M.disableTowerDrop() pcall(function() DTTG:SetValue(false) end) end
+	Fluent:Notify({Title="Doom",Content="Alles gestopt + tower hersteld",Duration=3})
+end})
+
+-- Valentine
 local VSP=ET:AddParagraph({Title="💝 Valentine",Content="Idle"})
 local VTG=ET:AddToggle("ValentineToggle",{Title="💝 Valentine",Default=false}) VTG:OnChanged(function(v) if v then M.startValentine() else M.stopValentine() end end)
+
+-- Arcade
 local ASP=ET:AddParagraph({Title="🕹️ Arcade",Content="Idle"})
 local ATG=ET:AddToggle("ArcadeToggle",{Title="🕹️ Arcade",Default=false}) ATG:OnChanged(function(v) if v then M.startArcade() else M.stopArcade() end end)
 
+-- ========== AUTO TAB ==========
 local AT2=W:AddTab({Title="Auto",Icon="rocket"})
 local MSP=AT2:AddParagraph({Title="💰 Money",Content="Idle"})
 local MTG=AT2:AddToggle("MoneyToggle",{Title="💰 Money",Default=false}) MTG:OnChanged(function(v) if v then M.findBase() M.startMoney() else M.stopMoney() end end)
@@ -1396,46 +1961,83 @@ local MFSP=AT2:AddParagraph({Title="🗺️ Map Fixer",Content="Uit"})
 local MFTG=AT2:AddToggle("MapToggle",{Title="🗺️ Map Fixer",Default=false}) MFTG:OnChanged(function(v) if v then M.startMapFixer() else M.stopMapFixer() end end)
 AT2:AddButton({Title="🗺️ Fix 1x",Callback=function() M._lastFixedMapName="" pcall(function() M.mapRunFix() end) end})
 
-AT2:AddParagraph({Title="🛡️ God Mode v22",Content="Size.H bug gefixed\nMuren 80 hoog (Y=-10 tot Y=70)\nDikte 6 studs | Kill zone uit"})
+AT2:AddParagraph({Title="🛡️ God Mode v23",Content="Doom Event compatible\nMuren W=420 (portals bereikbaar)\nTower mover geïntegreerd"})
 AT2:AddDropdown("GodWalkY",{Title="Loop Y",Description="-2=aanbevolen",Values=GODWALKY,Default="-2",Multi=false}):OnChanged(function(v) M.S.GodWalkY=tonumber(v) or -2 if M._isGod then godTeleportUnder() end end)
 AT2:AddDropdown("GodFloorY",{Title="Vloer Y",Values=GODFLOORY,Default="-5",Multi=false}):OnChanged(function(v) M.S.GodFloorY=tonumber(v) or -5 end)
 local GDSP=AT2:AddParagraph({Title="God Status",Content="Uit"})
 local GDTG=AT2:AddToggle("GodToggle",{Title="🛡️ God Mode",Default=false})
-GDTG:OnChanged(function(v) if v then M.enableGod() Fluent:Notify({Title="God v22",Content="Aan! Size.H bug gefixed\nVloer + muren actief",Duration=5}) else M.disableGod() end end)
+GDTG:OnChanged(function(v) if v then M.enableGod() Fluent:Notify({Title="God v23",Content="Aan! Doom compatible\nMuren W=420",Duration=5}) else M.disableGod() end end)
 AT2:AddButton({Title="📍 Teleport Onder",Callback=function() if M._isGod then godTeleportUnder() end end})
 
 AT2:AddToggle("InstantToggle",{Title="⚡ Instant Pickup",Default=true}):OnChanged(function(v) M.S.InstantPickup=v if v then M.setupInstant() end end)
 local AFKSP=AT2:AddParagraph({Title="AFK",Content="Uit"})
 local AFKTG=AT2:AddToggle("AFKToggle",{Title="🛡️ Anti-AFK",Default=false}) AFKTG:OnChanged(function(v) if v then M.startAFK() else M.stopAFK() end end)
 
+-- ========== CONFIG TAB ==========
 local CT=W:AddTab({Title="Config",Icon="settings"})
 CT:AddDropdown("TweenSpeed",{Title="Speed",Values=SPD,Default="INSTANT",Multi=false}):OnChanged(function(v) M.S.TweenSpeed=SPM[v] or 9999 end)
 CT:AddDropdown("CorridorSpeed",{Title="Corridor",Values=CSPD,Default="1500",Multi=false}):OnChanged(function(v) M.S.CorridorSpeed=tonumber(v) or 1500 end)
-CT:AddButton({Title="🔄 Herlaad",Callback=function() M.S.SelectedBrainrots={} pcall(function() BDD:SetValues(M.getBrainrotNamesMulti(M.S.TargetRarity)) BDD:SetValue({}) end) end})
+CT:AddButton({Title="🔄 Herlaad Brainrots",Callback=function() M.S.SelectedBrainrots={} pcall(function() BDD:SetValues(M.getBrainrotNamesMulti(M.S.TargetRarity)) BDD:SetValue({}) end) end})
+CT:AddButton({Title="🔄 Herlaad Rarities/Mutations",Callback=function()
+	local newRAR = M.getAvailableRarities()
+	local newMUT = M.getAvailableMutations()
+	Fluent:Notify({Title="Herlaad",Content="Rarities: "..#newRAR.."\nMutations: "..#newMUT.."\n(Herstart script voor dropdowns)",Duration=5})
+end})
 CT:AddButton({Title="🏠 Zoek Base",Callback=function() M.findBase() Fluent:Notify({Title="Base",Content=M.baseGUID or "?",Duration=3}) end})
 CT:AddButton({Title="📍 Home Op",Callback=function() M.setHomePosition() end})
 CT:AddButton({Title="📋 Slots",Callback=function() M.findBase() local o=M.findOccupiedSlots() local i="" for _,s in pairs(o) do i=i.."S"..s.slot..":"..s.name.." L"..s.level.."\n" end Fluent:Notify({Title="Slots("..#o..")",Content=#o>0 and i or "Leeg!",Duration=8}) end})
 CT:AddButton({Title="🗑️ Leeg Slot",Callback=function() M.findBase() M.clearSlot(tonumber(M.S.FarmSlot) or 5) end})
 CT:AddButton({Title="🏠 Ga Base",Callback=function() M.findBase() M.returnToBase() end})
-CT:AddButton({Title="🛡️ God Debug",Callback=function()
+CT:AddButton({Title="🛡️ Debug Info",Callback=function()
 	local i="God:".. (M._isGod and "AAN" or "UIT").."\nWalk:"..M.S.GodWalkY.." Floor:"..M.S.GodFloorY
 	i=i.."\nOrig:"..#M._godOriginalFloors.." God:"..#M._godCreatedParts.." Kill:"..#M._godKillParts
-	i=i.."\nMuur H:"..MF.WH.." Y:"..MF.WY.." (".. (MF.WY-MF.WH/2) .." tot ".. (MF.WY+MF.WH/2) ..")"
-	i=i.."\nMuur dikte:"..MF.WT
+	i=i.."\nMuur W:"..MF.W.." H:"..MF.WH.." Y:"..MF.WY.." (".. (MF.WY-MF.WH/2) .." tot ".. (MF.WY+MF.WH/2) ..")"
+	i=i.."\nDoom: "..(M.S.DoomEnabled and "AAN" or "UIT").." Parts:"..#M._doomCachedParts
+	i=i.."\nTower: "..(M._towerMoved and "Verplaatst" or "Origineel")
+	local tY = getTowerY() if tY then i=i.." Y:"..string.format("%.1f",tY) end
+	local bY = getTowerBottomY() if bY then i=i.." Bot:"..string.format("%.1f",bY) end
+	if M._towerDetectedFloorY then i=i.."\nFloor detected: Y="..string.format("%.1f",M._towerDetectedFloorY).." (".. (M._towerDetectedSource or "?") ..")" end
 	local hrp=Player.Character and Player.Character:FindFirstChild("HumanoidRootPart") if hrp then i=i.."\nPlayer Y:"..string.format("%.1f",hrp.Position.Y) end
-	Fluent:Notify({Title="God Debug",Content=i,Duration=10}) end})
+	-- Show available mutations
+	local muts = M.getAvailableMutations()
+	i=i.."\nMutations: "..table.concat(muts, ", ")
+	Fluent:Notify({Title="Debug v12.0",Content=i,Duration=12}) end})
 local IP=CT:AddParagraph({Title="Info",Content="..."})
 
+-- ========== SETTINGS TAB ==========
 local ST2=W:AddTab({Title="Settings",Icon="shield"})
 SaveManager:SetLibrary(Fluent) InterfaceManager:SetLibrary(Fluent) SaveManager:SetFolder("MzDHub") InterfaceManager:SetFolder("MzDHub")
 InterfaceManager:BuildInterfaceSection(ST2) SaveManager:BuildConfigSection(ST2)
 
+-- ========== STATUS UPDATER ==========
 task.spawn(function() while task.wait(1) do pcall(function()
 	FSP:SetDesc((M.S.Farming and M.Status.farm or "Idle").." | #"..M.Status.farmCount) FPP:SetDesc("P:"..M.Status.placeCount.." U:"..M.Status.upgradeCount)
 	if not M.S.Farming then pcall(function() if FTG.Value then FTG:SetValue(false) end end) end
 	LBSP:SetDesc((M.S.LuckyBlockEnabled and M.Status.luckyBlock or "Idle").." #"..M.Status.luckyBlockCount)
 	if not M.S.LuckyBlockEnabled then pcall(function() if LBTG.Value then LBTG:SetValue(false) end end) end
 	FCSP:SetDesc((M.Status.factory or "Idle").." #"..M.Status.factoryCount) if not M.S.FactoryEnabled then pcall(function() if FCTG.Value then FCTG:SetValue(false) end end) end
+
+	-- Doom status
+	if M.S.DoomEnabled then
+		local folder = workspace:FindFirstChild("DoomEventParts")
+		local fc = folder and #folder:GetChildren() or 0
+		DMSP:SetDesc("AAN ✓ | Parts:" .. #M._doomCachedParts .. " | Folder:" .. fc .. " | Touch:" .. M._doomCollected)
+	else
+		DMSP:SetDesc("Uit")
+	end
+	if not M.S.DoomEnabled then pcall(function() if DMTG.Value then DMTG:SetValue(false) end end) end
+
+	-- Tower status
+	if M.S.DoomTowerEnabled then
+		local tY = getTowerY()
+		local bY = getTowerBottomY()
+		local flY = M._towerDetectedFloorY
+		DTSP:SetDesc("AAN ✓ | Pivot:" .. (tY and string.format("%.0f", tY) or "?") .. " Bot:" .. (bY and string.format("%.0f", bY) or "?") .. " Floor:" .. (flY and string.format("%.0f", flY) or "?") .. " Off:" .. M.S.DoomTowerOffset)
+	else
+		DTSP:SetDesc("Uit")
+	end
+	if not M.S.DoomTowerEnabled then pcall(function() if DTTG.Value then DTTG:SetValue(false) end end) end
+
 	VSP:SetDesc((M.S.ValentineEnabled and M.Status.valentine or "Idle").." #"..M.Status.valentineCount) if not M.S.ValentineEnabled then pcall(function() if VTG.Value then VTG:SetValue(false) end end) end
 	ASP:SetDesc(M.S.ArcadeEnabled and ("Actief #"..M.Status.arcadeCount) or "Idle") if not M.S.ArcadeEnabled then pcall(function() if ATG.Value then ATG:SetValue(false) end end) end
 	MSP:SetDesc(M.S.AutoCollectMoney and "Actief" or "Idle") if not M.S.AutoCollectMoney then pcall(function() if MTG.Value then MTG:SetValue(false) end end) end
@@ -1444,12 +2046,18 @@ task.spawn(function() while task.wait(1) do pcall(function()
 	AFKSP:SetDesc("AFK:"..M.Status.afk) if not M.S.AntiAFK then pcall(function() if AFKTG.Value then AFKTG:SetValue(false) end end) end
 	GDSP:SetDesc(M.Status.god) if not M._isGod then pcall(function() if GDTG.Value then GDTG:SetValue(false) end end) end
 	local hrp=Player.Character and Player.Character:FindFirstChild("HumanoidRootPart") local curY=hrp and string.format("%.1f",hrp.Position.Y) or "?"
-	IP:SetDesc("Player:"..Player.Name.."\nBase:"..(M.baseGUID or "?").."\nGod:"..(M._isGod and("AAN Y="..M.S.GodWalkY.." K:"..#M._godKillParts.." V:"..#M._godCreatedParts) or "UIT").."\nY:"..curY.."\nMuur: Y=".. (MF.WY-MF.WH/2) .." tot ".. (MF.WY+MF.WH/2) .." (H:"..MF.WH.." D:"..MF.WT..")")
+	IP:SetDesc("Player:"..Player.Name.."\nBase:"..(M.baseGUID or "?").."\nGod:"..(M._isGod and("AAN Y="..M.S.GodWalkY.." K:"..#M._godKillParts.." V:"..#M._godCreatedParts) or "UIT").."\nDoom:"..(M.S.DoomEnabled and "AAN" or "UIT").." Tower:"..(M._towerMoved and "Moved" or "Off").."\nY:"..curY.."\nMuur W:"..MF.W.." (".. (MF.WY-MF.WH/2) .." tot ".. (MF.WY+MF.WH/2) ..")")
 end) end end)
 
 task.spawn(function() task.wait(1) M.findBase() task.wait(0.5) M.detectWallZ()
-	Fluent:Notify({Title="MzD Hub v11.2",Content="🛡️ God v22 - Size.H bug gefixed!\nVloer + muren werken nu ✓\n1. Map Fixer → 2. God Mode",Duration=6})
+	local mutList = M.getAvailableMutations()
+	local rarList = M.getAvailableRarities()
+	Fluent:Notify({Title="MzD Hub v12.0",Content="🔥 Doom Event Update!\n🪙 Doom Coin Collector\n🗼 Dynamische Tower Mover\n🛡️ Muren W=420 (portals ok)\n📊 "..#rarList.." rarities | "..#mutList.." mutations",Duration=8})
 end)
 
 W:SelectTab(1)
-print("[MzD Hub] v11.2 GELADEN ✦ Size.H bug gefixed ✓")
+print("[MzD Hub] v12.0 GELADEN ✦ Doom Event ✓")
+print("[MzD Hub] Mutations: " .. table.concat(M.getAvailableMutations(), ", "))
+print("[MzD Hub] Rarities: " .. table.concat(M.getAvailableRarities(), ", "))
+print("[MzD Hub] Tower: " .. tostring(findTower() ~= nil))
+print("[MzD Hub] DoomEventParts: " .. tostring(workspace:FindFirstChild("DoomEventParts") ~= nil))
