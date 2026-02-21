@@ -2,7 +2,6 @@
 -- MzD Hub v10.9 - VOLLEDIG
 -- God Mode v19: Zwarte vloer + muur collision
 -- Noclip excludeert MzD muren & god vloer
--- Load: loadstring(game:HttpGet("https://raw.githubusercontent.com/mzdtools/EBFT/main/Escape"))()
 -- ============================================
 getgenv().MzD = {}
 local M = getgenv().MzD
