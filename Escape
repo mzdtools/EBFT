@@ -955,8 +955,18 @@ end
 local function godTeleportUnder()
     local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
+    local hum = Player.Character:FindFirstChild("Humanoid")
     hrp.Velocity = Vector3.new(0, 0, 0)
     hrp.CFrame = CFrame.new(hrp.Position.X, M.S.GodWalkY, hrp.Position.Z)
+    if hum then
+        pcall(function()
+            hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+            hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+            hum:SetStateEnabled(Enum.HumanoidStateType.Tripping, false)
+            hum:ChangeState(Enum.HumanoidStateType.Running)
+            hum.HipHeight = 0
+        end)
+    end
 end
 
 local function godStartLoop()
@@ -967,6 +977,7 @@ local function godStartLoop()
                 local ch = Player.Character
                 if not ch then return end
                 local hrp = ch:FindFirstChild("HumanoidRootPart")
+                local hum = ch:FindFirstChild("Humanoid")
                 if tick() - M._godFloorCacheTime > 5 then
                     for _, data in pairs(M._godOriginalFloors) do
                         if data.part and data.part.Parent then
@@ -975,6 +986,22 @@ local function godStartLoop()
                         end
                     end
                     M._godFloorCacheTime = tick()
+                end
+                if hum then
+                    pcall(function()
+                        hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+                        hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+                        hum:SetStateEnabled(Enum.HumanoidStateType.Tripping, false)
+                    end)
+                    -- Fix omvallen: als niet running, forceer het
+                    pcall(function()
+                        local state = hum:GetState()
+                        if state == Enum.HumanoidStateType.FallingDown or
+                            state == Enum.HumanoidStateType.Ragdoll or
+                            state == Enum.HumanoidStateType.Tripping then
+                            hum:ChangeState(Enum.HumanoidStateType.Running)
+                        end
+                    end)
                 end
                 if hrp then
                     local curY = hrp.Position.Y
@@ -997,6 +1024,10 @@ local function godSetupHealth(char)
     pcall(function()
         hum.MaxHealth = math.huge hum.Health = math.huge
         hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.Tripping, false)
+        hum.HipHeight = 0
     end)
     for _, ff in pairs(char:GetChildren()) do if ff:IsA("ForceField") then ff:Destroy() end end
     local ff = Instance.new("ForceField") ff.Visible = false ff.Parent = char
