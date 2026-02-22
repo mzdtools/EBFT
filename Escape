@@ -887,6 +887,7 @@ local function godBuildEgaleVloer(map)
     local theme = getThemeColors()
     local maxSeg = 2000
     local curX = startX
+    local firstSegment = true
     while curX < endX do
         local segLen = math.min(maxSeg, endX - curX)
         local centerX = curX + segLen / 2
@@ -900,6 +901,39 @@ local function godBuildEgaleVloer(map)
         floor.TopSurface = Enum.SurfaceType.Smooth floor.BottomSurface = Enum.SurfaceType.Smooth
         floor.Parent = workspace
         table.insert(M._godCreatedParts, floor)
+
+        -- Logo op het eerste vloersegment (bovenkant)
+        if firstSegment then
+            firstSegment = false
+            pcall(function()
+                local sg = Instance.new("SurfaceGui")
+                sg.Face = Enum.NormalId.Top
+                sg.CanvasSize = Vector2.new(2400, 800)
+                sg.AlwaysOnTop = false
+                sg.Parent = floor
+
+                local title = Instance.new("TextLabel")
+                title.Size               = UDim2.new(1, 0, 0.6, 0)
+                title.Position           = UDim2.new(0, 0, 0.05, 0)
+                title.BackgroundTransparency = 1
+                title.Text               = "MzD Hub"
+                title.TextColor3         = theme.glow
+                title.TextScaled         = true
+                title.Font               = Enum.Font.GothamBold
+                title.Parent             = sg
+
+                local sub = Instance.new("TextLabel")
+                sub.Size               = UDim2.new(0.4, 0, 0.2, 0)
+                sub.Position           = UDim2.new(0.3, 0, 0.7, 0)
+                sub.BackgroundTransparency = 1
+                sub.Text               = "v12.4"
+                sub.TextColor3         = theme.stripe
+                sub.TextScaled         = true
+                sub.Font               = Enum.Font.Gotham
+                sub.Parent             = sg
+            end)
+        end
+
         local topY = floorY + floorThickness / 2 + 0.1
         for _, zPos in pairs({floorWidth / 2 - 5, -floorWidth / 2 + 5}) do
             local s = Instance.new("Part")
@@ -2365,10 +2399,16 @@ function M.stopArcade() M.S.ArcadeEnabled = false if M.arcadeThread then pcall(t
 
 -- ============================================
 -- MAP FIXER
+-- W   = corridor breedte (Z-as)
+-- WH  = muurhoogte — groot genoeg voor volledige map
+-- WT  = muurdikte
+-- INT = update interval
+-- WY wordt DYNAMISCH berekend per mapBuildWalls aanroep
+--   zodat muren altijd starten bij de MzD god-vloer (GodFloorY)
 -- ============================================
-local MF = {W=420,WH=80,WT=6,INT=8}
-MF.SZ=MF.W/2
-MF.WY = MF.WH/2 - 10
+local MF = {W=420, WH=220, WT=6, INT=8}
+MF.SZ = MF.W / 2
+MF.WY = 100   -- fallback; echte waarde berekend in mapBuildWalls
 
 local function safeDestroyFolder(parent, fn)
     if not parent then return end
@@ -2574,54 +2614,198 @@ function M.mapFillGaps(map, sx, ex)
 end
 
 function M.mapBuildWalls(map, sx, ex)
+    -- Muren worden ABSOLUUT gepositioneerd:
+    --   Start altijd op Y = WALL_BOTTOM (ver genoeg onder elke god vloer)
+    --   Hoogte = WALL_H (hoog genoeg om boven de hele map uit te steken)
+    -- Zo worden ze nooit afgekapt, ongeacht GodFloorY instelling.
+    local WALL_BOTTOM = -25          -- onderkant muur, ruim onder de laagste god vloer
+    local WALL_H      = 300          -- totale hoogte: van -25 tot +275, hoog genoeg voor elke map
+    local WALL_MID_Y  = WALL_BOTTOM + WALL_H / 2   -- = 125
+
+    -- Stripe posities relatief aan de bovenkant van de god-vloer
+    local floorTop  = M.S.GodFloorY + 2   -- bovenkant MzD god vloer
+    local sBot = floorTop + 1             -- net boven vloer
+    local sMid = floorTop + WALL_H * 0.2  -- 20% hoogte
+    local sTop = floorTop + WALL_H * 0.85 -- 85% hoogte
+
+    -- Logo Y op de muur (midden van het zichtbare gedeelte boven de vloer)
+    local logoY = floorTop + WALL_H * 0.35
+
+    -- Check of muren al goed staan (juiste hoogte + Y)
     local mf = map:FindFirstChild("MzDHubWalls")
     if mf then
         local fw = mf:FindFirstChild("FrontWall_1")
-        if fw and math.abs(fw.Size.Y - MF.WH) < 1 and math.abs(fw.Position.Y - MF.WY) < 1 then
-            M._wallZ_front = MF.SZ - 3 M._wallZ_back = -MF.SZ + 3 return
+        if fw
+            and math.abs(fw.Size.Y - WALL_H) < 1
+            and math.abs(fw.Position.Y - WALL_MID_Y) < 1 then
+            M._wallZ_front = MF.SZ - 3
+            M._wallZ_back  = -MF.SZ + 3
+            return
         end
         pcall(function() mf:Destroy() end)
     end
-    mf = Instance.new("Folder") mf.Name = "MzDHubWalls" mf.Parent = map
+
+    mf = Instance.new("Folder")
+    mf.Name = "MzDHubWalls"
+    mf.Parent = map
+
     local theme = getThemeColors()
+
+    -- Massieve muur part aanmaken
     local function mw(nm, sz, ps)
-        local w = Instance.new("Part") w.Name = nm w.Size = sz w.Position = ps
-        w.Anchored = true w.CanCollide = true
-        w.Color = theme.wall w.Material = Enum.Material.SmoothPlastic
-        w.TopSurface = Enum.SurfaceType.Smooth w.BottomSurface = Enum.SurfaceType.Smooth
-        w.Parent = mf return w
+        local w = Instance.new("Part")
+        w.Name = nm
+        w.Size = sz
+        w.Position = ps
+        w.Anchored = true
+        w.CanCollide = true
+        w.Color = theme.wall
+        w.Material = Enum.Material.SmoothPlastic
+        w.TopSurface = Enum.SurfaceType.Smooth
+        w.BottomSurface = Enum.SurfaceType.Smooth
+        w.Parent = mf
+        return w
     end
+
+    -- Neon stripe aanmaken
     local function ms(nm, sz, ps)
-        local s = Instance.new("Part") s.Name = nm s.Size = sz s.Position = ps
-        s.Anchored = true s.CanCollide = false
-        s.Color = theme.stripe s.Material = Enum.Material.Neon
+        local s = Instance.new("Part")
+        s.Name = nm
+        s.Size = sz
+        s.Position = ps
+        s.Anchored = true
+        s.CanCollide = false
+        s.Color = theme.stripe
+        s.Material = Enum.Material.Neon
         s.Parent = mf
     end
-    local function at(w, f)
-        local sg = Instance.new("SurfaceGui") sg.Face = f sg.CanvasSize = Vector2.new(800,400) sg.Parent = w
-        local t2 = Instance.new("TextLabel") t2.Size = UDim2.new(1,0,0.5,0) t2.Position = UDim2.new(0,0,0.1,0)
-        t2.BackgroundTransparency = 1 t2.Text = "MzD Hub" t2.TextColor3 = theme.glow t2.TextScaled = true t2.Font = Enum.Font.GothamBold t2.Parent = sg
-        local s2 = Instance.new("TextLabel") s2.Size = UDim2.new(0.6,0,0.2,0) s2.Position = UDim2.new(0.2,0,0.6,0)
-        s2.BackgroundTransparency = 1 s2.Text = "v12.3" s2.TextColor3 = Color3.fromRGB(200,200,200) s2.TextScaled = true s2.Font = Enum.Font.Gotham s2.Parent = sg
+
+    -- Logo SurfaceGui op een muur (voor EN achterkant)
+    local function addWallLogo(w, face)
+        local sg = Instance.new("SurfaceGui")
+        sg.Face = face
+        sg.CanvasSize = Vector2.new(1600, 500)
+        sg.AlwaysOnTop = false
+        sg.Parent = w
+
+        local title = Instance.new("TextLabel")
+        title.Size               = UDim2.new(1, 0, 0.6, 0)
+        title.Position           = UDim2.new(0, 0, 0.05, 0)
+        title.BackgroundTransparency = 1
+        title.Text               = "MzD Hub"
+        title.TextColor3         = theme.glow
+        title.TextScaled         = true
+        title.Font               = Enum.Font.GothamBold
+        title.Parent             = sg
+
+        local sub = Instance.new("TextLabel")
+        sub.Size               = UDim2.new(0.5, 0, 0.2, 0)
+        sub.Position           = UDim2.new(0.25, 0, 0.68, 0)
+        sub.BackgroundTransparency = 1
+        sub.Text               = "v12.4"
+        sub.TextColor3         = Color3.fromRGB(200, 200, 200)
+        sub.TextScaled         = true
+        sub.Font               = Enum.Font.Gotham
+        sub.Parent             = sg
+
+        local line = Instance.new("Frame")
+        line.Size            = UDim2.new(0.7, 0, 0.025, 0)
+        line.Position        = UDim2.new(0.15, 0, 0.65, 0)
+        line.BackgroundColor3 = theme.stripe
+        line.BorderSizePixel = 0
+        line.Parent          = sg
     end
-    local segs = {} local sl = 2000 local p2 = sx
-    while p2 < ex do local l = math.min(sl, ex-p2) table.insert(segs, {s=p2,l=l}) p2 = p2 + l end
+
+    -- Logo op de god-vloer (eerste MzDGodFloor segment)
+    local function addFloorLogo()
+        local floorPart = nil
+        for _, c in pairs(workspace:GetChildren()) do
+            if c.Name == "MzDGodFloor" and c:IsA("BasePart") then
+                floorPart = c
+                break
+            end
+        end
+        if not floorPart then return end
+
+        -- Verwijder oude SurfaceGui's op dit segment
+        for _, ch in pairs(floorPart:GetChildren()) do
+            if ch:IsA("SurfaceGui") then ch:Destroy() end
+        end
+
+        local sg = Instance.new("SurfaceGui")
+        sg.Face = Enum.NormalId.Top
+        sg.CanvasSize = Vector2.new(2400, 800)
+        sg.AlwaysOnTop = false
+        sg.Parent = floorPart
+
+        local title = Instance.new("TextLabel")
+        title.Size               = UDim2.new(1, 0, 0.6, 0)
+        title.Position           = UDim2.new(0, 0, 0.05, 0)
+        title.BackgroundTransparency = 1
+        title.Text               = "MzD Hub"
+        title.TextColor3         = theme.glow
+        title.TextScaled         = true
+        title.Font               = Enum.Font.GothamBold
+        title.Parent             = sg
+
+        local sub = Instance.new("TextLabel")
+        sub.Size               = UDim2.new(0.4, 0, 0.2, 0)
+        sub.Position           = UDim2.new(0.3, 0, 0.7, 0)
+        sub.BackgroundTransparency = 1
+        sub.Text               = "v12.4"
+        sub.TextColor3         = theme.stripe
+        sub.TextScaled         = true
+        sub.Font               = Enum.Font.Gotham
+        sub.Parent             = sg
+    end
+
+    -- Bouw muren in segmenten (max 2000 studs per Part)
+    local segs = {}
+    local p2 = sx
+    while p2 < ex do
+        local l = math.min(2000, ex - p2)
+        table.insert(segs, {s = p2, l = l})
+        p2 = p2 + l
+    end
+
     for i, s in pairs(segs) do
-        local cx = s.s + s.l/2
-        local fw = mw("FrontWall_"..i, Vector3.new(s.l, MF.WH, MF.WT), Vector3.new(cx, MF.WY, MF.SZ+MF.WT/2))
-        at(fw, Enum.NormalId.Front) at(fw, Enum.NormalId.Back)
-        ms("FS_t"..i, Vector3.new(s.l,1.5,0.3), Vector3.new(cx, 20, MF.SZ+MF.WT+0.2))
-        ms("FS_b"..i, Vector3.new(s.l,1.5,0.3), Vector3.new(cx, 2, MF.SZ+MF.WT+0.2))
-        ms("FS_m"..i, Vector3.new(s.l,0.5,0.3), Vector3.new(cx, 10, MF.SZ+MF.WT+0.2))
-        local bw = mw("BackWall_"..i, Vector3.new(s.l, MF.WH, MF.WT), Vector3.new(cx, MF.WY, -MF.SZ-MF.WT/2))
-        at(bw, Enum.NormalId.Front) at(bw, Enum.NormalId.Back)
-        ms("BS_t"..i, Vector3.new(s.l,1.5,0.3), Vector3.new(cx, 20, -MF.SZ-MF.WT-0.2))
-        ms("BS_b"..i, Vector3.new(s.l,1.5,0.3), Vector3.new(cx, 2, -MF.SZ-MF.WT-0.2))
-        ms("BS_m"..i, Vector3.new(s.l,0.5,0.3), Vector3.new(cx, 10, -MF.SZ-MF.WT-0.2))
+        local cx = s.s + s.l / 2
+
+        -- VOORMUUR
+        local fw = mw("FrontWall_" .. i,
+            Vector3.new(s.l, WALL_H, MF.WT),
+            Vector3.new(cx, WALL_MID_Y, MF.SZ + MF.WT / 2))
+        addWallLogo(fw, Enum.NormalId.Front)
+        addWallLogo(fw, Enum.NormalId.Back)
+
+        -- Neon stripes voormuur
+        ms("FS_bot" .. i, Vector3.new(s.l, 2,   0.4), Vector3.new(cx, sBot, MF.SZ + MF.WT + 0.3))
+        ms("FS_mid" .. i, Vector3.new(s.l, 1,   0.4), Vector3.new(cx, sMid, MF.SZ + MF.WT + 0.3))
+        ms("FS_top" .. i, Vector3.new(s.l, 2,   0.4), Vector3.new(cx, sTop, MF.SZ + MF.WT + 0.3))
+
+        -- ACHTERMUUR
+        local bw = mw("BackWall_" .. i,
+            Vector3.new(s.l, WALL_H, MF.WT),
+            Vector3.new(cx, WALL_MID_Y, -MF.SZ - MF.WT / 2))
+        addWallLogo(bw, Enum.NormalId.Front)
+        addWallLogo(bw, Enum.NormalId.Back)
+
+        -- Neon stripes achtermuur
+        ms("BS_bot" .. i, Vector3.new(s.l, 2,   0.4), Vector3.new(cx, sBot, -MF.SZ - MF.WT - 0.3))
+        ms("BS_mid" .. i, Vector3.new(s.l, 1,   0.4), Vector3.new(cx, sMid, -MF.SZ - MF.WT - 0.3))
+        ms("BS_top" .. i, Vector3.new(s.l, 2,   0.4), Vector3.new(cx, sTop, -MF.SZ - MF.WT - 0.3))
     end
-    mw("LeftWall", Vector3.new(MF.WT, MF.WH, MF.SZ*2+MF.WT*2+2), Vector3.new(sx-MF.WT/2, MF.WY, 0))
-    mw("RightWall", Vector3.new(MF.WT, MF.WH, MF.SZ*2+MF.WT*2+2), Vector3.new(ex+MF.WT/2, MF.WY, 0))
-    M._wallZ_front = MF.SZ - 3 M._wallZ_back = -MF.SZ + 3
+
+    -- Linker en rechter eindmuren
+    local totalZ = MF.SZ * 2 + MF.WT * 2 + 2
+    mw("LeftWall",  Vector3.new(MF.WT, WALL_H, totalZ), Vector3.new(sx - MF.WT / 2, WALL_MID_Y, 0))
+    mw("RightWall", Vector3.new(MF.WT, WALL_H, totalZ), Vector3.new(ex + MF.WT / 2, WALL_MID_Y, 0))
+
+    -- Logo op de vloer
+    pcall(addFloorLogo)
+
+    M._wallZ_front = MF.SZ - 3
+    M._wallZ_back  = -MF.SZ + 3
 end
 
 function M.mapFixCollision(map, si)
@@ -2639,8 +2823,15 @@ function M.mapFixCollision(map, si)
     if mf2 then
         for _, w in pairs(mf2:GetChildren()) do
             if w:IsA("BasePart") then
-                if w.Name:find("FS") or w.Name:find("BS") then w.CanCollide = false
-                else w.CanCollide = true w.Anchored = true end
+                local n = w.Name
+                -- Neon stripes: geen collisie
+                if n:find("FS_") or n:find("BS_") then
+                    w.CanCollide = false
+                else
+                    -- Echte muren: collisie aan
+                    w.CanCollide = true
+                    w.Anchored = true
+                end
             end
         end
     end
@@ -2981,9 +3172,24 @@ AT2:AddDropdown("GodFloorY", {
     Title = "🟫 Vloer Y",
     Description = "Default: 10",
     Values = GODFLOORY,
-    Default = "10",   -- FIX: default 10
+    Default = "10",
     Multi = false
-}):OnChanged(function(v) M.S.GodFloorY = tonumber(v) or 10 end)
+}):OnChanged(function(v)
+    M.S.GodFloorY = tonumber(v) or 10
+    -- Herbouw vloer + muren met nieuwe Y
+    if M._isGod then
+        local map = M.mapFindCurrentMap()
+        if map then
+            pcall(function() godBuildEgaleVloer(map) end)
+            -- Gooi bestaande muren weg zodat ze met juiste stripes herbouwd worden
+            local mf = map:FindFirstChild("MzDHubWalls")
+            if mf then pcall(function() mf:Destroy() end) end
+            local sx, ex = M.mapDetectXRange(map, M.mapFindShared(map.Name))
+            pcall(function() M.mapBuildWalls(map, sx, ex) end)
+        end
+        pcall(function() godTeleportUnder() end)
+    end
+end)
 
 local GDSP = AT2:AddParagraph({Title = "😇 God Status", Content = "Uit"})
 local GDTG = AT2:AddToggle("GodToggle", {Title = "😇 God Mode", Default = false})
