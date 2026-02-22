@@ -643,7 +643,7 @@ local function godFindFloorParts()
     end
     if not map then
         for _, c in pairs(workspace:GetChildren()) do
-            if c:IsA("Model") and c.Name:find("Map") then
+            if c:IsA("Model") and c.Name:find("Map") and not c.Name:find("SharedInstances") then
                 local cnt = 0
                 for _, d in pairs(c:GetDescendants()) do
                     if d:IsA("BasePart") then cnt += 1 end
@@ -663,6 +663,7 @@ local function godFindFloorParts()
         end
     end
     if map then
+        -- Check directe children
         for _, c in pairs(map:GetChildren()) do
             if c:IsA("BasePart") and not isMzDPart(c) then
                 local n = c.Name:lower()
@@ -671,6 +672,31 @@ local function godFindFloorParts()
                     n == "bridgefloor" then
                     table.insert(floors, c)
                 else checkPart(c) end
+            end
+        end
+        -- v12.2.1: Check OOK descendants (voor maps zoals RadioactiveMap/OG/FirstFloor)
+        for _, d in pairs(map:GetDescendants()) do
+            if d:IsA("BasePart") and not isMzDPart(d) then
+                local n = d.Name:lower()
+                if n == "firstfloor" or n == "ground" or n == "floor" or
+                    n == "bridgefloor" then
+                    local already = false
+                    for _, f in pairs(floors) do
+                        if f == d then already = true break end
+                    end
+                    if not already then table.insert(floors, d) end
+                else
+                    -- Check grote vlakke parts in subfolders
+                    if d.Size.X > 50 and d.Size.Z > 50 and d.Size.Y < 10 then
+                        if d.Position.Y > -10 and d.Position.Y < 30 then
+                            local already = false
+                            for _, f in pairs(floors) do
+                                if f == d then already = true break end
+                            end
+                            if not already then table.insert(floors, d) end
+                        end
+                    end
+                end
             end
         end
         local sp = map:FindFirstChild("Spawners")
@@ -702,9 +728,10 @@ local function godDetectMapXRange(map)
         found = true
     end
     if map then
-        for _, c in pairs(map:GetChildren()) do if c:IsA("BasePart") then chk(c) end end
-        local sp = map:FindFirstChild("Spawners")
-        if sp then for _, s in pairs(sp:GetChildren()) do chk(s) end end
+        -- v12.2.1: Scan ALL descendants, niet alleen children
+        for _, d in pairs(map:GetDescendants()) do
+            if d:IsA("BasePart") then chk(d) end
+        end
     end
     for _, c in pairs(workspace:GetChildren()) do
         if c.Name:find("SharedInstances") then
@@ -1904,11 +1931,44 @@ function M.mapDetectXRange(map, si)
 end
 
 local function getFloorParts(map, si)
-    local fl = {} local function af(p) if not p:IsA("BasePart") or isMzDPart(p) then return end if p.Size.Y > p.Size.X and p.Size.Y > p.Size.Z then return end if p.Position.Y > 30 or p.Position.Y < -20 or p.Size.X < 5 then return end for _, f in pairs(fl) do if f == p then return end end table.insert(fl, p) end
-    local ff = map:FindFirstChild("FirstFloor") if ff and ff:IsA("BasePart") then af(ff) end local gr = map:FindFirstChild("Ground") if gr and gr:IsA("BasePart") then af(gr) end
-    local sp = map:FindFirstChild("Spawners") if sp then for _, s in pairs(sp:GetChildren()) do if s:IsA("BasePart") then af(s) end end end
-    for _, c in pairs(map:GetChildren()) do if c:IsA("BasePart") then local n = c.Name:lower() if n=="firstfloor" or n=="ground" or n=="bridgefloor" or n=="floor" or n=="grass" or n=="path" or n=="road" or n=="platform" then af(c) elseif c.Size.X > 50 and c.Size.Z > 10 and c.Size.Y < 10 then af(c) end end end
-    if si then local sf = si:FindFirstChild("Floors") if sf then for _, f in pairs(sf:GetChildren()) do if f:IsA("BasePart") then af(f) end end end for _, c in pairs(si:GetChildren()) do if c:IsA("BasePart") and c.Size.X > 50 and c.Size.Z > 10 and c.Size.Y < 10 then af(c) end end end
+    local fl = {}
+    local seen = {}
+    local function af(p)
+        if not p:IsA("BasePart") or isMzDPart(p) then return end
+        if seen[p] then return end
+        if p.Size.Y > p.Size.X and p.Size.Y > p.Size.Z then return end
+        if p.Position.Y > 30 or p.Position.Y < -20 or p.Size.X < 5 then return end
+        seen[p] = true
+        table.insert(fl, p)
+    end
+    if map then
+        -- v12.2.1: Scan descendants voor maps met subfolders
+        for _, d in pairs(map:GetDescendants()) do
+            if d:IsA("BasePart") and not isMzDPart(d) then
+                local n = d.Name:lower()
+                if n == "firstfloor" or n == "ground" or n == "bridgefloor" or
+                    n == "floor" or n == "grass" or n == "path" or n == "road" or
+                    n == "platform" then
+                    af(d)
+                elseif d.Size.X > 50 and d.Size.Z > 10 and d.Size.Y < 10 then
+                    af(d)
+                end
+            end
+        end
+    end
+    if si then
+        local sf = si:FindFirstChild("Floors")
+        if sf then
+            for _, f in pairs(sf:GetChildren()) do
+                if f:IsA("BasePart") then af(f) end
+            end
+        end
+        for _, c in pairs(si:GetChildren()) do
+            if c:IsA("BasePart") and c.Size.X > 50 and c.Size.Z > 10 and c.Size.Y < 10 then
+                af(c)
+            end
+        end
+    end
     return fl
 end
 
