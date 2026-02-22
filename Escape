@@ -1745,7 +1745,7 @@ function M.startFarming()
         M.Status.farm = "Idle"
         M.farmThread = nil
     end)
-
+end
 
 function M.stopFarming()
     M.S.Farming = false
