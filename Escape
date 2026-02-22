@@ -1,7 +1,7 @@
 -- ============================================
 -- loadstring(game:HttpGet("https://raw.githubusercontent.com/mzdtools/EBFT/main/Escape"))()
 -- ============================================
--- MzD Hub v12.3
+-- MzD Hub v12.4
 -- FIX: Money collector gebruikt correcte remote path
 -- FIX: Slot count dynamisch via workspace.Bases[guid].Slots
 -- FIX: GUID dynamisch opgehaald (verandert bij reconnect)
@@ -1975,8 +1975,19 @@ function M.setupInstant() for _, o in pairs(workspace:GetDescendants()) do if o:
 M.setupInstant()
 
 -- ============================================
--- VALENTINE
+-- VALENTINE v12.4
+-- Loop:
+--   1. Heartbeat: firetouchinterest op alle workspace.ValentinesCoinParts
+--      + auto-detect nieuwe spawns via DescendantAdded
+--   2. Main thread: check hearts elke seconde
+--      < 100  → blijf collecten (status tonen)
+--      >= 100 → teleporteer ONDER de CandyGramStation (GodWalkY)
+--              → fire ProximityPrompt op CandyGramStation
+--              → wacht tot hearts gereset → terug → herhaal
+-- GEEN brainrots ophalen!
 -- ============================================
+
+-- ─── hearts lezen ───────────────────────────────────────
 function M.getHeartCount()
     local count = 0
     pcall(function()
@@ -1984,205 +1995,368 @@ function M.getHeartCount()
         if ls then
             for _, v in pairs(ls:GetChildren()) do
                 local n = v.Name:lower()
-                if n:find("heart") or n:find("candy") or n:find("valentine") or n:find("gram") then
-                    count = tonumber(v.Value) or 0 return
+                if n:find("heart") or n:find("candy") or n:find("gram") or n:find("valentine") then
+                    local val = tonumber(v.Value) or 0
+                    if val > count then count = val end
                 end
             end
         end
     end)
     if count == 0 then
         pcall(function()
-            for _, a in pairs({"Hearts","Candy","CandyGrams","Valentines","Love","CandyHearts"}) do
+            for _, a in pairs({"Hearts","Candy","CandyGrams","Valentines","Love","CandyHearts","ValentineHearts"}) do
                 local v = Player:GetAttribute(a)
-                if v and tonumber(v) and tonumber(v) > 0 then count = tonumber(v) return end
+                if v then local n2 = tonumber(v) or 0 if n2 > count then count = n2 end end
             end
         end)
     end
     return count
 end
 
-function M.refreshValentineCache()
-    M._valentineCachedParts = {}
-    M._valentineLastCacheScan = tick()
-    local kw = {"heart","candy","valentine","love","gram","pickup","collect","token"}
-    for _, obj in pairs(workspace:GetDescendants()) do
-        if obj:IsA("BasePart") then
-            local n = obj.Name:lower()
-            local m = false
-            for _, k in pairs(kw) do if n:find(k) then m = true break end end
-            if not m and obj:FindFirstChild("TouchInterest") then m = true end
-            if m then table.insert(M._valentineCachedParts, obj) end
-        end
-    end
-end
+-- ─── CandyGramStation vinden ────────────────────────────
+-- Primair: workspace.ValentinesMap.CandyGramStation (exact pad)
+-- Fallback: zoek op naam in heel workspace
+function M.findCandyGramStation()
+    -- Exact pad eerst
+    local station = nil
+    pcall(function()
+        station = workspace.ValentinesMap.CandyGramStation
+    end)
+    if station then return station end
 
-function M.findValentineStation()
-    local kw = {"candygram","station","submit","deposit","exchange","mailbox","postbox","valentine"}
-    local best = nil local bestDist = math.huge
+    -- Fallback: zoek op naam
     for _, obj in pairs(workspace:GetDescendants()) do
         local n = obj.Name:lower()
-        local match = false
-        for _, k in pairs(kw) do if n:find(k) then match = true break end end
-        if match then
-            local hasPrompt = false
+        if n:find("candygram") or n:find("candygrams") or n:find("station") then
             if obj:IsA("BasePart") or obj:IsA("Model") then
-                for _, d in pairs(obj:GetDescendants()) do if d:IsA("ProximityPrompt") then hasPrompt = true break end end
+                return obj
             end
-            if obj:IsA("ProximityPrompt") then hasPrompt = true end
-            if hasPrompt then
-                local pos = nil
-                if obj:IsA("BasePart") then pos = obj.Position
-                elseif obj:IsA("Model") then pcall(function() pos = obj:GetPivot().Position end)
-                elseif obj:IsA("ProximityPrompt") and obj.Parent and obj.Parent:IsA("BasePart") then pos = obj.Parent.Position end
-                if pos then
+        end
+    end
+    return nil
+end
+
+-- Positie van de station ophalen (voor teleport)
+function M.getStationPosition()
+    local station = M.findCandyGramStation()
+    if not station then return nil end
+    local pos = nil
+    if station:IsA("BasePart") then
+        pos = station.Position
+    elseif station:IsA("Model") then
+        pcall(function() pos = station:GetPivot().Position end)
+        if not pos then
+            -- zoek eerste BasePart
+            for _, d in pairs(station:GetDescendants()) do
+                if d:IsA("BasePart") then pos = d.Position break end
+            end
+        end
+    end
+    return pos
+end
+
+-- ─── coins verzamelen (heartbeat) ───────────────────────
+-- Bron: workspace.ValentinesCoinParts (alle children zijn coins)
+function M._valentineStartCoinCollector()
+    -- Sluit oude connections
+    if M.valentineCollectorConn then
+        pcall(function() M.valentineCollectorConn:Disconnect() end)
+        M.valentineCollectorConn = nil
+    end
+    if M._valentineDescAddedConn then
+        pcall(function() M._valentineDescAddedConn:Disconnect() end)
+        M._valentineDescAddedConn = nil
+    end
+
+    -- Cache van coin parts
+    M._valentineCachedParts = {}
+    M._valentineLastCacheScan = tick()
+
+    local function cacheCoins()
+        local folder = workspace:FindFirstChild("ValentinesCoinParts")
+        if not folder then return end
+        local fresh = {}
+        for _, p in pairs(folder:GetDescendants()) do
+            if p:IsA("BasePart") then table.insert(fresh, p) end
+        end
+        -- ook directe children
+        for _, p in pairs(folder:GetChildren()) do
+            if p:IsA("BasePart") then
+                local al = false
+                for _, f in pairs(fresh) do if f == p then al = true break end end
+                if not al then table.insert(fresh, p) end
+            end
+        end
+        M._valentineCachedParts = fresh
+        M._valentineLastCacheScan = tick()
+    end
+
+    cacheCoins()
+
+    -- Nieuwe coins auto-detecten
+    local coinFolder = workspace:FindFirstChild("ValentinesCoinParts")
+    if coinFolder then
+        M._valentineDescAddedConn = coinFolder.DescendantAdded:Connect(function(d)
+            if not M.S.ValentineEnabled then return end
+            if d:IsA("BasePart") then
+                table.insert(M._valentineCachedParts, d)
+                -- meteen aanraken
+                pcall(function()
                     local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
-                    local dist = hrp and (hrp.Position - pos).Magnitude or 0
-                    if not best or dist < bestDist then
-                        best = obj bestDist = dist
-                        M._valentineStationCF = CFrame.new(pos)
+                    if hrp then
+                        firetouchinterest(hrp, d, 0)
+                        firetouchinterest(hrp, d, 1)
                     end
-                end
+                end)
             end
-        end
+        end)
+    else
+        -- Wacht op de folder als die nog niet bestaat
+        task.spawn(function()
+            local f2 = workspace:WaitForChild("ValentinesCoinParts", 60)
+            if f2 and M.S.ValentineEnabled then
+                cacheCoins()
+                M._valentineDescAddedConn = f2.DescendantAdded:Connect(function(d)
+                    if not M.S.ValentineEnabled then return end
+                    if d:IsA("BasePart") then
+                        table.insert(M._valentineCachedParts, d)
+                        pcall(function()
+                            local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+                            if hrp then firetouchinterest(hrp, d, 0) firetouchinterest(hrp, d, 1) end
+                        end)
+                    end
+                end)
+            end
+        end)
     end
-    return best
-end
 
-function M.submitAtStation()
-    local station = M.findValentineStation()
-    if not station then return false end
-    local targetCF = M._valentineStationCF
-    if targetCF then M.safePathTo(targetCF * CFrame.new(0, 3, 0)) task.wait(0.5) end
-    local fired = false
-    local function firePrompts(obj)
-        if obj:IsA("ProximityPrompt") then
-            pcall(function() obj.HoldDuration = 0 obj.MaxActivationDistance = 99999 obj.RequiresLineOfSight = false end)
-            pcall(function() fireproximityprompt(obj) end) fired = true
-        end
-        for _, d in pairs(obj:GetDescendants()) do
-            if d:IsA("ProximityPrompt") then
-                pcall(function() d.HoldDuration = 0 d.MaxActivationDistance = 99999 d.RequiresLineOfSight = false end)
-                pcall(function() fireproximityprompt(d) end) fired = true
-            end
-        end
-    end
-    firePrompts(station)
-    if station.Parent then firePrompts(station.Parent) end
-    local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
-    if hrp then
-        local function touchAll(obj)
-            if obj:IsA("BasePart") then pcall(function() firetouchinterest(hrp, obj, 0) firetouchinterest(hrp, obj, 1) end) end
-            for _, d in pairs(obj:GetDescendants()) do if d:IsA("BasePart") then pcall(function() firetouchinterest(hrp, d, 0) firetouchinterest(hrp, d, 1) end) end end
-        end
-        touchAll(station)
-        if station.Parent and not station.Parent:IsA("Workspace") then touchAll(station.Parent) end
-    end
-    task.wait(0.5)
-    if not fired and hrp then
-        for _, obj in pairs(workspace:GetDescendants()) do
-            if obj:IsA("ProximityPrompt") and obj.Parent and obj.Parent:IsA("BasePart") then
-                local dist = (obj.Parent.Position - hrp.Position).Magnitude
-                if dist < 20 then
-                    pcall(function() obj.HoldDuration = 0 obj.MaxActivationDistance = 99999 obj.RequiresLineOfSight = false end)
-                    pcall(function() fireproximityprompt(obj) end) fired = true
-                end
-            end
-        end
-    end
-    return fired
-end
-
-function M.startValentine()
-    if M.valentineThread then return end
-    M.S.ValentineEnabled = true M.Status.valentineCount = 0 M._valentineCollecting = true
-    M.refreshValentineCache() M.setHomePosition() M.enableGod()
-    if M._valentineDescAddedConn then pcall(function() M._valentineDescAddedConn:Disconnect() end) end
-    M._valentineDescAddedConn = workspace.DescendantAdded:Connect(function(d)
-        if not M.S.ValentineEnabled then return end
-        if d:IsA("BasePart") then
-            local n = d.Name:lower()
-            local kw = {"heart","candy","valentine","gram"}
-            for _, k in pairs(kw) do
-                if n:find(k) then
-                    table.insert(M._valentineCachedParts, d)
-                    pcall(function() local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart") if hrp then firetouchinterest(hrp, d, 0) firetouchinterest(hrp, d, 1) end end)
-                    break
-                end
-            end
-        end
-        if d:IsA("ProximityPrompt") then pcall(function() d.HoldDuration = 0 d.MaxActivationDistance = 99999 end) end
-    end)
+    -- Heartbeat: raak alle gecachede coins aan
     M.valentineCollectorConn = RunService.Heartbeat:Connect(function()
-        if not M.S.ValentineEnabled or not M._valentineCollecting then return end
+        if not M.S.ValentineEnabled then return end
         pcall(function()
             local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
             if not hrp then return end
-            if tick() - M._valentineLastCacheScan > 10 then
-                local a = {}
-                for _, p in pairs(M._valentineCachedParts) do if p and p.Parent then table.insert(a, p) end end
-                M._valentineCachedParts = a M._valentineLastCacheScan = tick()
+
+            -- Herlaad cache elke 5 seconden
+            if tick() - M._valentineLastCacheScan > 5 then
+                local alive = {}
+                for _, p in pairs(M._valentineCachedParts) do
+                    if p and p.Parent then table.insert(alive, p) end
+                end
+                -- Voeg nieuwe toe uit folder
+                local folder2 = workspace:FindFirstChild("ValentinesCoinParts")
+                if folder2 then
+                    for _, p in pairs(folder2:GetDescendants()) do
+                        if p:IsA("BasePart") then
+                            local found = false
+                            for _, a in pairs(alive) do if a == p then found = true break end end
+                            if not found then table.insert(alive, p) end
+                        end
+                    end
+                end
+                M._valentineCachedParts = alive
+                M._valentineLastCacheScan = tick()
             end
+
+            -- Touch alle coins
             for _, p in pairs(M._valentineCachedParts) do
-                if p and p.Parent then firetouchinterest(hrp, p, 0) firetouchinterest(hrp, p, 1) end
+                if p and p.Parent then
+                    firetouchinterest(hrp, p, 0)
+                    firetouchinterest(hrp, p, 1)
+                end
             end
         end)
     end)
-    M.valentineThread = task.spawn(function()
-        while M.S.ValentineEnabled do
-            local ok = pcall(function()
-                if M.isDead() then M.waitForRespawn() task.wait(1) M.setHomePosition() M.enableGod() return end
-                local h = M.getHeartCount()
-                M.Status.valentine = "H:" .. h .. " P:" .. #M._valentineCachedParts .. " #" .. M.Status.valentineCount
-                if h >= 100 then
-                    M._valentineCollecting = false task.wait(0.3)
-                    local prevH = h
-                    for attempt = 1, 5 do
-                        if not M.S.ValentineEnabled then break end
-                        M.submitAtStation() task.wait(1)
-                        local newH = M.getHeartCount()
-                        if newH < prevH or newH == 0 then M.Status.valentineCount += 1 break end
-                        task.wait(1)
+end
+
+-- ─── submit bij CandyGramStation ────────────────────────
+-- Teleporteer ONDER de station (zelfde X/Z, maar GodWalkY),
+-- dan fire de ProximityPrompt
+function M.submitCandyGrams()
+    local stationPos = M.getStationPosition()
+    if not stationPos then
+        M.Status.valentine = "⚠️ Station niet gevonden!"
+        task.wait(2)
+        return false
+    end
+
+    -- Teleporteer onder de station op GodWalkY
+    local targetCF = CFrame.new(stationPos.X, M.S.GodWalkY, stationPos.Z)
+    M.tweenTo(targetCF)
+    task.wait(0.3)
+
+    local fired = false
+    local station = M.findCandyGramStation()
+    if station then
+        -- Fire alle ProximityPrompts in/op de station
+        local function fireAll(obj)
+            if not obj then return end
+            if obj:IsA("ProximityPrompt") then
+                pcall(function()
+                    obj.HoldDuration = 0
+                    obj.MaxActivationDistance = 99999
+                    obj.RequiresLineOfSight = false
+                end)
+                pcall(function() fireproximityprompt(obj) end)
+                fired = true
+            end
+            for _, d in pairs(obj:GetDescendants()) do
+                if d:IsA("ProximityPrompt") then
+                    pcall(function()
+                        d.HoldDuration = 0
+                        d.MaxActivationDistance = 99999
+                        d.RequiresLineOfSight = false
+                    end)
+                    pcall(function() fireproximityprompt(d) end)
+                    fired = true
+                end
+            end
+        end
+        fireAll(station)
+        if station.Parent and not station.Parent:IsA("Workspace") then
+            fireAll(station.Parent)
+        end
+
+        -- Ook firetouchinterest voor alle BaseParts van de station
+        local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local function touchAll(obj)
+                if obj:IsA("BasePart") then
+                    pcall(function() firetouchinterest(hrp, obj, 0) firetouchinterest(hrp, obj, 1) end)
+                end
+                for _, d in pairs(obj:GetDescendants()) do
+                    if d:IsA("BasePart") then
+                        pcall(function() firetouchinterest(hrp, d, 0) firetouchinterest(hrp, d, 1) end)
                     end
-                    M.refreshValentineCache() M._valentineCollecting = true
-                else
-                    if not M.ActiveBrainrots then M.ActiveBrainrots = workspace:FindFirstChild("ActiveBrainrots") end
-                    if M.ActiveBrainrots then
-                        local found = false
-                        local rarityOrder = {"Common","Uncommon","Rare","Epic","Legendary","Mythical","Cosmic","Secret"}
-                        for _, rarity in pairs(rarityOrder) do
-                            if not M.S.ValentineEnabled or M.isDead() then break end
-                            local folder = M.ActiveBrainrots:FindFirstChild(rarity)
-                            if folder and folder:IsA("Folder") then
-                                for _, b in pairs(folder:GetChildren()) do
-                                    if not M.S.ValentineEnabled or M.isDead() then break end
-                                    local root = M.findBrainrotRoot(b)
-                                    if root and root.Parent then
-                                        found = true
-                                        M.Status.valentine = "-> " .. rarity .. " H:" .. h
-                                        M.safePathTo(root.CFrame * CFrame.new(0, 3, 0))
-                                        M.forceGrabPrompt(root) M.forceGrabPrompt(b)
-                                        task.wait(0.3) M.safeUnequip() break
-                                    end
-                                end
-                            end
-                            if found then break end
+                end
+            end
+            touchAll(station)
+        end
+    end
+
+    -- Fallback: alle nabije prompts binnen 50 studs
+    if not fired then
+        local hrp = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            for _, obj in pairs(workspace:GetDescendants()) do
+                if obj:IsA("ProximityPrompt") and obj.Parent and obj.Parent:IsA("BasePart") then
+                    local dist = (obj.Parent.Position - hrp.Position).Magnitude
+                    if dist < 50 then
+                        pcall(function()
+                            obj.HoldDuration = 0
+                            obj.MaxActivationDistance = 99999
+                            obj.RequiresLineOfSight = false
+                        end)
+                        pcall(function() fireproximityprompt(obj) end)
+                        fired = true
+                    end
+                end
+            end
+        end
+    end
+
+    task.wait(0.5)
+    return fired
+end
+
+-- ─── Main valentine loop ─────────────────────────────────
+function M.startValentine()
+    if M.valentineThread then return end
+    M.S.ValentineEnabled = true
+    M.Status.valentineCount = 0
+    M.Status.valentine = "Opstarten..."
+
+    -- Zorg dat God mode aan is (voor onder-map lopen)
+    if not M._isGod then M.enableGod() end
+
+    -- Start coin collector (heartbeat)
+    M._valentineStartCoinCollector()
+
+    M.valentineThread = task.spawn(function()
+        local submitCount = 0
+
+        while M.S.ValentineEnabled do
+            local ok, err = pcall(function()
+                if M.isDead() then
+                    M.waitForRespawn()
+                    task.wait(1)
+                    if not M._isGod then M.enableGod() end
+                    return
+                end
+
+                local h = M.getHeartCount()
+                local coinCount = #M._valentineCachedParts
+                M.Status.valentine = "💝 " .. h .. "/100 hearts | 🪙 " .. coinCount .. " coins | #" .. submitCount
+
+                if h >= 100 then
+                    -- Genoeg hearts → ga submiten
+                    M.Status.valentine = "🏃 Naar station... H:" .. h
+                    local ok2 = M.submitCandyGrams()
+
+                    if ok2 then
+                        -- Wacht tot hearts gereset (max 5 sec)
+                        local prevH = h
+                        local waitStart = tick()
+                        repeat
+                            task.wait(0.3)
+                            h = M.getHeartCount()
+                        until h < prevH or tick() - waitStart > 5
+
+                        if h < prevH then
+                            submitCount += 1
+                            M.Status.valentineCount = submitCount
+                            M.Status.valentine = "✅ Submit #" .. submitCount .. " | Nu: " .. h .. " hearts"
+                        else
+                            M.Status.valentine = "⚠️ Submit mislukt? H:" .. h
                         end
-                        if not found then M.Status.valentine = "Wacht... H:" .. h task.wait(2) end
-                    else task.wait(3) end
+                    else
+                        M.Status.valentine = "⚠️ Kon niet submiten, retry..."
+                        task.wait(2)
+                    end
+
+                    task.wait(0.5)
+                else
+                    -- Nog niet genoeg hearts, gewoon wachten (collector loopt op heartbeat)
+                    task.wait(1)
                 end
             end)
-            task.wait(0.3)
+
+            if not ok then
+                task.wait(1)
+            end
         end
-        M.disableGod() M.Status.valentine = "Idle" M.valentineThread = nil
+
+        -- Stop collector
+        if M.valentineCollectorConn then
+            pcall(function() M.valentineCollectorConn:Disconnect() end)
+            M.valentineCollectorConn = nil
+        end
+        if M._valentineDescAddedConn then
+            pcall(function() M._valentineDescAddedConn:Disconnect() end)
+            M._valentineDescAddedConn = nil
+        end
+        M._valentineCachedParts = {}
+        M.Status.valentine = "Idle"
+        M.valentineThread = nil
     end)
 end
 
 function M.stopValentine()
-    M.S.ValentineEnabled = false M._valentineCollecting = false
-    if M.valentineThread then pcall(task.cancel, M.valentineThread) M.valentineThread = nil end
-    if M.valentineCollectorConn then pcall(function() M.valentineCollectorConn:Disconnect() end) M.valentineCollectorConn = nil end
-    if M._valentineDescAddedConn then pcall(function() M._valentineDescAddedConn:Disconnect() end) M._valentineDescAddedConn = nil end
-    M._valentineCachedParts = {} M.Status.valentine = "Idle"
+    M.S.ValentineEnabled = false
+    if M.valentineThread then
+        pcall(task.cancel, M.valentineThread)
+        M.valentineThread = nil
+    end
+    if M.valentineCollectorConn then
+        pcall(function() M.valentineCollectorConn:Disconnect() end)
+        M.valentineCollectorConn = nil
+    end
+    if M._valentineDescAddedConn then
+        pcall(function() M._valentineDescAddedConn:Disconnect() end)
+        M._valentineDescAddedConn = nil
+    end
+    M._valentineCachedParts = {}
+    M.Status.valentine = "Idle"
 end
 
 -- ========== ARCADE ==========
@@ -2521,7 +2695,7 @@ function M.stopMapFixer()
     M.Status.mapFixer = "Uit"
 end
 
-print("[MzD Hub] Core v12.3 Geladen")
+print("[MzD Hub] Core v12.4 Geladen")
 
 -- ============================================
 -- GUI
@@ -2559,7 +2733,7 @@ local THEMES = {"Auto","Dark","Doom","Valentine","UFO","Bright"}
 
 local W = Fluent:CreateWindow({
     Title = "MzD Hub",
-    SubTitle = "v12.3",
+    SubTitle = "v12.4",
     TabWidth = 160,
     Size = UDim2.fromOffset(640, 540),
     Acrylic = true,
@@ -2706,27 +2880,41 @@ ET:AddButton({Title = "⏹ Doom Alles Uit", Callback = function()
 end})
 
 -- VALENTINE EVENT
-ET:AddParagraph({Title = "💝 Valentine Event", Content = "Rent naar brainrots voor hearts\nBij 100 hearts → station → submit"})
+ET:AddParagraph({
+    Title = "💝 Valentine Event",
+    Content = "Verzamelt hearts via ValentinesCoinParts\nBij 100 hearts → CandyGramStation → submit\nGeen brainrots ophalen!"
+})
 
 local VSP = ET:AddParagraph({Title = "💝 Valentine Status", Content = "Idle"})
-local VTG = ET:AddToggle("ValentineToggle", {Title = "💝 Auto Valentine", Default = false})
+local VTG = ET:AddToggle("ValentineToggle", {Title = "💝 Auto Valentine (Hearts + Submit)", Default = false})
 VTG:OnChanged(function(v)
     if v then M.startValentine() else M.stopValentine() end
 end)
 
-ET:AddButton({Title = "💝 Zoek Station", Callback = function()
-    local s = M.findValentineStation()
-    if s then
-        local pos = M._valentineStationCF and M._valentineStationCF.Position or Vector3.new(0, 0, 0)
-        Fluent:Notify({Title = "💝 Station", Content = s.Name .. "\nPos: " .. tostring(pos), Duration = 5})
+ET:AddButton({Title = "💝 Info: Station + Coins", Callback = function()
+    local stationPos = M.getStationPosition()
+    local station = M.findCandyGramStation()
+    local coinFolder = workspace:FindFirstChild("ValentinesCoinParts")
+    local coinCount = coinFolder and #coinFolder:GetChildren() or 0
+    local h = M.getHeartCount()
+    local info = "Hearts: " .. h .. "/100"
+    info = info .. "\nCoins in folder: " .. coinCount
+    info = info .. "\nGecached: " .. #M._valentineCachedParts
+    if station then
+        info = info .. "\nStation: " .. station.Name
     else
-        Fluent:Notify({Title = "💝 Station", Content = "Niet gevonden!", Duration = 3})
+        info = info .. "\nStation: NIET GEVONDEN!"
     end
+    if stationPos then
+        info = info .. "\nStation pos: " .. string.format("%.0f, %.0f, %.0f", stationPos.X, stationPos.Y, stationPos.Z)
+    end
+    Fluent:Notify({Title = "💝 Valentine Info", Content = info, Duration = 8})
 end})
 
-ET:AddButton({Title = "💝 Submit Nu", Callback = function()
-    local ok = M.submitAtStation()
-    Fluent:Notify({Title = "💝 Submit", Content = ok and "Done!" or "Mislukt", Duration = 3})
+ET:AddButton({Title = "💝 Submit Nu (1x)", Callback = function()
+    local ok = M.submitCandyGrams()
+    local h = M.getHeartCount()
+    Fluent:Notify({Title = "💝 Submit", Content = (ok and "Gefired!" or "Mislukt") .. "\nHearts nu: " .. h, Duration = 4})
 end})
 
 -- ARCADE EVENT
@@ -2982,10 +3170,10 @@ task.spawn(function()
     local slotCount = M.getSlotCount()
     Fluent:Notify({
         Title = "MzD Hub v12.3",
-        Content = "✅ Money remote: gefixed\n✅ Slots dynamisch: " .. slotCount .. "\n✅ Deco: auto verwijderd\n✅ Factory: all rarities\n✅ Icons + defaults",
+        Content = "✅ Valentine: coins + station submit\n✅ Geen brainrots meer!\n✅ workspace.ValentinesCoinParts\n✅ workspace.ValentinesMap.CandyGramStation",
         Duration = 8
     })
 end)
 
 W:SelectTab(1)
-print("[MzD Hub] v12.3 GELADEN")
+print("[MzD Hub] v12.4 GELADEN")
