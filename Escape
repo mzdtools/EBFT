@@ -1,4 +1,4 @@
--- ⚡ MzD ETFB RNG SCRIPT V3 (LIVE COUNTER FIX) ⚡
+-- ⚡ MzD ETFB RNG SCRIPT V4 (SELF-VERIFYING OVERLAY) ⚡
 local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
@@ -22,6 +22,7 @@ pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 e
 StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, false)
 pcall(function() GuiService:SetMenuEnabled(false) end)
 
+-- Workspace Stripper
 task.spawn(function()
     task.wait(2)
     local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
@@ -59,43 +60,66 @@ MainFrame.BorderColor3 = Color3.fromRGB(200, 0, 0)
 MainFrame.Parent = ScreenGui
 
 local ContentFrame = Instance.new("Frame")
-ContentFrame.Size = UDim2.new(0.8, 0, 0.6, 0)
-ContentFrame.Position = UDim2.new(0.1, 0, 0.2, 0)
+ContentFrame.Size = UDim2.new(0.8, 0, 0.7, 0)
+ContentFrame.Position = UDim2.new(0.1, 0, 0.15, 0)
 ContentFrame.BackgroundTransparency = 1
 ContentFrame.Parent = MainFrame
 
 local TitleLabel = Instance.new("TextLabel")
-TitleLabel.Size = UDim2.new(1, 0, 0.15, 0)
-TitleLabel.Position = UDim2.new(0, 0, 0.05, 0)
+TitleLabel.Size = UDim2.new(1, 0, 0.12, 0)
+TitleLabel.Position = UDim2.new(0, 0, 0, 0)
 TitleLabel.BackgroundTransparency = 1
-TitleLabel.Text = "🎲 MzD ETFB RNG SCRIPT 🎲"
+TitleLabel.Text = "🎲 MzD ETFB RNG SCRIPT V4 🎲"
 TitleLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextScaled = true
 TitleLabel.Parent = ContentFrame
 
-local DiceLabel = Instance.new("TextLabel")
-DiceLabel.Size = UDim2.new(1, 0, 0.12, 0)
-DiceLabel.Position = UDim2.new(0, 0, 0.30, 0)
-DiceLabel.BackgroundTransparency = 1
-DiceLabel.Text = "0 number of dice rolls"
-DiceLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
-DiceLabel.Font = Enum.Font.Gotham
-DiceLabel.TextScaled = true
-DiceLabel.Parent = ContentFrame
+-- 🟢 NIEUW: Knipperende Systeem-Hartslag (Laat zien dat script NIET bevroren is)
+local HeartbeatLabel = Instance.new("TextLabel")
+HeartbeatLabel.Size = UDim2.new(1, 0, 0.08, 0)
+HeartbeatLabel.Position = UDim2.new(0, 0, 0.15, 0)
+HeartbeatLabel.BackgroundTransparency = 1
+HeartbeatLabel.Text = "⚡ SCRIPT STATUS: APPLICATIE DRAAIT [●]"
+HeartbeatLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+HeartbeatLabel.Font = Enum.Font.Code
+HeartbeatLabel.TextScaled = true
+HeartbeatLabel.Parent = ContentFrame
+
+-- ⏱️ NIEUW: Onafhankelijke Uptime klok
+local UptimeLabel = Instance.new("TextLabel")
+UptimeLabel.Size = UDim2.new(1, 0, 0.08, 0)
+UptimeLabel.Position = UDim2.new(0, 0, 0.25, 0)
+UptimeLabel.BackgroundTransparency = 1
+UptimeLabel.Text = "⏱️ Script Verstreken Tijd: 0s"
+UptimeLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+UptimeLabel.Font = Enum.Font.Code
+UptimeLabel.TextScaled = true
+UptimeLabel.Parent = ContentFrame
+
+-- 🛠️ NIEUW: Live Achtergrond Actie Log
+local ActionLabel = Instance.new("TextLabel")
+ActionLabel.Size = UDim2.new(1, 0, 0.08, 0)
+ActionLabel.Position = UDim2.new(0, 0, 0.38, 0)
+ActionLabel.BackgroundTransparency = 1
+ActionLabel.Text = "🔄 Actie: Initialiseren..."
+ActionLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
+ActionLabel.Font = Enum.Font.Gotham
+ActionLabel.TextScaled = true
+ActionLabel.Parent = ContentFrame
 
 local InfinityLabel = Instance.new("TextLabel")
-InfinityLabel.Size = UDim2.new(1, 0, 0.12, 0)
-InfinityLabel.Position = UDim2.new(0, 0, 0.50, 0)
+InfinityLabel.Size = UDim2.new(1, 0, 0.10, 0)
+InfinityLabel.Position = UDim2.new(0, 0, 0.55, 0)
 InfinityLabel.BackgroundTransparency = 1
 InfinityLabel.Text = "0 number of Infinity counts?"
-InfinityLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+InfinityLabel.TextColor3 = Color3.fromRGB(170, 0, 255)
 InfinityLabel.Font = Enum.Font.Gotham
 InfinityLabel.TextScaled = true
 InfinityLabel.Parent = ContentFrame
 
 local EternalLabel = Instance.new("TextLabel")
-EternalLabel.Size = UDim2.new(1, 0, 0.12, 0)
+EternalLabel.Size = UDim2.new(1, 0, 0.10, 0)
 EternalLabel.Position = UDim2.new(0, 0, 0.70, 0)
 EternalLabel.BackgroundTransparency = 1
 EternalLabel.Text = "0 number of Eternal counts?"
@@ -105,59 +129,50 @@ EternalLabel.TextScaled = true
 EternalLabel.Parent = ContentFrame
 
 -- ==========================================================================
--- VERBETERDE COUNTER LOGICA (Leaderstats + Backpack)
+-- LIVE ENGINE VOOR HIERBOVEN (Draait volledig los van de game)
 -- ==========================================================================
-local infinityCount = 0
-local eternalCount = 0
-local trackedItems = {}
-
--- 1. LIVE DICE ROLLS VOLGEN VIA LEADERSTATS
 task.spawn(function()
-    local leaderstats = LocalPlayer:WaitForChild("leaderstats", 15)
-    if leaderstats then
-        -- Zoek naar de waarde waarin het spel je rolls opslaat (meestal "Rolls" of "Dice")
-        local rollsStat = leaderstats:FindFirstChild("Rolls") or leaderstats:FindFirstChild("Dice") or leaderstats:FindFirstChild("TotalRolls")
+    local startTijd = tick()
+    local switch = false
+    while true do
+        local totaalSeconds = math.floor(tick() - startTijd)
+        local minuten = math.floor(totaalSeconds / 60)
+        local seconden = totaalSeconds % 60
+        UptimeLabel.Text = string.format("⏱️ Script Verstreken Tijd: %02dm %02ds", minuten, seconden)
         
-        if rollsStat then
-            DiceLabel.Text = rollsStat.Value .. " number of dice rolls"
-            
-            -- Telkens als de waarde in-game verandert, verandert je scherm direct mee
-            rollsStat:GetPropertyChangedSignal("Value"):Connect(function()
-                DiceLabel.Text = rollsStat.Value .. " number of dice rolls"
-            end)
+        switch = not switch
+        if switch then
+            HeartbeatLabel.Text = "⚡ SCRIPT STATUS: APPLICATIE DRAAIT [●]"
+            HeartbeatLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
         else
-            warn("[Mzd Fix] Kon de specifieke 'Rolls' waarde niet vinden in leaderstats.")
+            HeartbeatLabel.Text = "⚡ SCRIPT STATUS: APPLICATIE DRAAIT [○]"
+            HeartbeatLabel.TextColor3 = Color3.fromRGB(0, 150, 0)
         end
-    else
-        warn("[Mzd Fix] Geen leaderstats map gevonden binnen 15 seconden.")
+        task.wait(1)
     end
 end)
 
--- 2. RARE DROPS VOLGEN VIA BACKPACK
+-- ITEM TRACKER (Backpack)
+local infinityCount = 0
+local eternalCount = 0
+local trackedItems = {}
 local backpack = LocalPlayer:WaitForChild("Backpack", 15)
 
 if backpack then
-    -- Eerste scan
     for _, item in ipairs(backpack:GetChildren()) do
         if not trackedItems[item] then
             trackedItems[item] = true
             local itemName = item.Name:lower()
-            if string.find(itemName, "infinity") then
-                infinityCount = infinityCount + 1
-            elseif string.find(itemName, "eternal") then
-                eternalCount = eternalCount + 1
-            end
+            if string.find(itemName, "infinity") then infinityCount = infinityCount + 1
+            elseif string.find(itemName, "eternal") then eternalCount = eternalCount + 1 end
         end
     end
-    
     InfinityLabel.Text = infinityCount .. " number of Infinity counts?"
     EternalLabel.Text = eternalCount .. " number of Eternal counts?"
     
-    -- Live luisteren naar zeldzame drops
     backpack.ChildAdded:Connect(function(item)
         if trackedItems[item] then return end
         trackedItems[item] = true
-        
         local itemName = item.Name:lower()
         if string.find(itemName, "infinity") then
             infinityCount = infinityCount + 1
@@ -165,23 +180,12 @@ if backpack then
         elseif string.find(itemName, "eternal") then
             eternalCount = eternalCount + 1
             EternalLabel.Text = eternalCount .. " number of Eternal counts?"
-            task.spawn(function()
-                for i = 1, 3 do
-                    EternalLabel.TextColor3 = Color3.fromRGB(255, 150, 150)
-                    task.wait(0.15)
-                    EternalLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
-                    task.wait(0.15)
-                end
-            end)
         end
     end)
-    
-    backpack.ChildRemoved:Connect(function(item)
-        trackedItems[item] = nil
-    end)
+    backpack.ChildRemoved:Connect(function(item) trackedItems[item] = nil end)
 end
 
--- AUTO UPGRADE
+-- AUTO UPGRADE (Met Live Visuele Status Updates)
 local upgradeActive = true
 local RF = ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Remotes"):WaitForChild("Networking"):WaitForChild("RF/RNGUpgradePurchase")
 
@@ -192,6 +196,8 @@ local function safePurchase(name)
 end
 
 local function maxOutUpgrade(name)
+    ActionLabel.Text = "⚙️ Upgraden: Bezig met " .. name .. "..."
+    ActionLabel.TextColor3 = Color3.fromRGB(255, 180, 0)
     while upgradeActive do
         if not safePurchase(name) then break end
         task.wait(0.4)
@@ -203,6 +209,8 @@ task.spawn(function()
     while upgradeActive do
         maxOutUpgrade("RollSpeed")
         maxOutUpgrade("Luck")
+        
+        ActionLabel.Text = "⚙️ Upgraden: Bezig met Special Luck..."
         local inf_done, ete_done = false, false
         while not (inf_done and ete_done) and upgradeActive do
             if not inf_done then
@@ -212,10 +220,15 @@ task.spawn(function()
                 if not safePurchase("EternalLuck") then ete_done = true else task.wait(0.4) end
             end
         end
+        
         maxOutUpgrade("TraitLuck")
-        task.wait(1800)
+        
+        -- Rustperiode status
+        ActionLabel.Text = "💤 Status: Upgrades voltooid. Wachten op geld..."
+        ActionLabel.TextColor3 = Color3.fromRGB(0, 200, 255)
+        task.wait(1800) -- 30 minuten rust
     end
 end)
 
 game:BindToClose(function() upgradeActive = false end)
-print("✅ MzD SCRIPT ACTIEF - LIVE COUNTERS GECORRIGEERD")
+print("✅ MzD SELF-VERIFYING SCRIPT GESTART")
