@@ -1,4 +1,4 @@
--- MzD ETFB RNG SCRIPT
+-- ⚡ MzD ETFB RNG SCRIPT V3 (LIVE COUNTER FIX) ⚡
 local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
@@ -7,7 +7,7 @@ local StarterGui = game:GetService("StarterGui")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 
--- RENDERING UIT
+-- RENDERING UIT (Resource Saving)
 pcall(function() RunService:Set3dRenderingEnabled(false) end)
 Lighting.Brightness = 0
 Lighting.ClockTime = 0
@@ -43,7 +43,7 @@ task.spawn(function()
     end
 end)
 
--- BLACK OVERLAY
+-- BLACK OVERLAY GUI
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "MzD_BlackOverlay"
 ScreenGui.ResetOnSpawn = false
@@ -104,19 +104,43 @@ EternalLabel.Font = Enum.Font.Gotham
 EternalLabel.TextScaled = true
 EternalLabel.Parent = ContentFrame
 
--- ITEM TRACKER
-local diceRolls = 0
+-- ==========================================================================
+-- VERBETERDE COUNTER LOGICA (Leaderstats + Backpack)
+-- ==========================================================================
 local infinityCount = 0
 local eternalCount = 0
 local trackedItems = {}
 
+-- 1. LIVE DICE ROLLS VOLGEN VIA LEADERSTATS
+task.spawn(function()
+    local leaderstats = LocalPlayer:WaitForChild("leaderstats", 15)
+    if leaderstats then
+        -- Zoek naar de waarde waarin het spel je rolls opslaat (meestal "Rolls" of "Dice")
+        local rollsStat = leaderstats:FindFirstChild("Rolls") or leaderstats:FindFirstChild("Dice") or leaderstats:FindFirstChild("TotalRolls")
+        
+        if rollsStat then
+            DiceLabel.Text = rollsStat.Value .. " number of dice rolls"
+            
+            -- Telkens als de waarde in-game verandert, verandert je scherm direct mee
+            rollsStat:GetPropertyChangedSignal("Value"):Connect(function()
+                DiceLabel.Text = rollsStat.Value .. " number of dice rolls"
+            end)
+        else
+            warn("[Mzd Fix] Kon de specifieke 'Rolls' waarde niet vinden in leaderstats.")
+        end
+    else
+        warn("[Mzd Fix] Geen leaderstats map gevonden binnen 15 seconden.")
+    end
+end)
+
+-- 2. RARE DROPS VOLGEN VIA BACKPACK
 local backpack = LocalPlayer:WaitForChild("Backpack", 15)
 
 if backpack then
+    -- Eerste scan
     for _, item in ipairs(backpack:GetChildren()) do
         if not trackedItems[item] then
             trackedItems[item] = true
-            diceRolls = diceRolls + 1
             local itemName = item.Name:lower()
             if string.find(itemName, "infinity") then
                 infinityCount = infinityCount + 1
@@ -126,15 +150,14 @@ if backpack then
         end
     end
     
-    DiceLabel.Text = diceRolls .. " number of dice rolls"
     InfinityLabel.Text = infinityCount .. " number of Infinity counts?"
     EternalLabel.Text = eternalCount .. " number of Eternal counts?"
     
+    -- Live luisteren naar zeldzame drops
     backpack.ChildAdded:Connect(function(item)
         if trackedItems[item] then return end
         trackedItems[item] = true
-        diceRolls = diceRolls + 1
-        DiceLabel.Text = diceRolls .. " number of dice rolls"
+        
         local itemName = item.Name:lower()
         if string.find(itemName, "infinity") then
             infinityCount = infinityCount + 1
@@ -195,4 +218,4 @@ task.spawn(function()
 end)
 
 game:BindToClose(function() upgradeActive = false end)
-print("✅ MzD SCRIPT ACTIEF")
+print("✅ MzD SCRIPT ACTIEF - LIVE COUNTERS GECORRIGEERD")
