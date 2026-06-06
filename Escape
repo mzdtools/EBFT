@@ -57,16 +57,14 @@ end
 
 print(myPlot and "✅ Plot: " .. myPlot.Name or "⚠️ Geen plot gevonden!")
 
--- Lighting platleggen
+-- Lighting normaal houden maar wel optimaliseren
 pcall(function()
     Lighting.Technology = Enum.Technology.Compatibility
     Lighting.GlobalShadows = false
-    Lighting.Brightness = 0
-    Lighting.ClockTime = 0
-    Lighting.OutdoorAmbient = Color3.new(0,0,0)
-    Lighting.Ambient = Color3.new(0,0,0)
-    Lighting.FogEnd = 100000
-    Lighting.FogStart = 100000
+    Lighting.Brightness = 2
+    Lighting.ClockTime = 14
+    Lighting.OutdoorAmbient = Color3.fromRGB(100, 100, 100)
+    Lighting.Ambient = Color3.fromRGB(80, 80, 80)
 end)
 
 for _, e in ipairs(Lighting:GetChildren()) do
@@ -84,31 +82,6 @@ pcall(function()
     workspace.Terrain.Decoration = false
 end)
 
--- Strip andere plots maar bewaar collision
-local function stripPlot(plot)
-    for _, obj in ipairs(plot:GetDescendants()) do
-        pcall(function()
-            if obj:IsA("BasePart") or obj:IsA("MeshPart") or obj:IsA("UnionOperation") then
-                obj.Transparency = 1
-                obj.CastShadow = false
-                -- Geen CanCollide = false zodat je niet valt
-            elseif obj:IsA("Decal") or obj:IsA("Texture") then
-                obj.Transparency = 1
-            elseif obj:IsA("ParticleEmitter") or obj:IsA("Beam")
-                or obj:IsA("Trail") or obj:IsA("Fire")
-                or obj:IsA("Smoke") or obj:IsA("Sparkles") then
-                obj.Enabled = false
-            elseif obj:IsA("Light") then
-                obj.Enabled = false
-            elseif obj:IsA("Sound") then
-                obj.Volume = 0
-            elseif obj:IsA("BillboardGui") or obj:IsA("SurfaceGui") then
-                obj.Enabled = false
-            end
-        end)
-    end
-end
-
 -- Workspace strippen
 for _, obj in ipairs(workspace:GetChildren()) do
     if obj == char then continue end
@@ -119,9 +92,10 @@ for _, obj in ipairs(workspace:GetChildren()) do
 
     pcall(function()
         if obj.Name == "Bases" and Bases then
+            -- Destroy andere plots
             for _, plot in ipairs(Bases:GetChildren()) do
                 if plot ~= myPlot then
-                    stripPlot(plot)
+                    pcall(function() plot:Destroy() end)
                 end
             end
         else
