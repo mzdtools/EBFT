@@ -3,21 +3,11 @@ local Lighting = game:GetService("Lighting")
 local LocalPlayer = Players.LocalPlayer
 local BasesFolder = workspace:FindFirstChild("Bases")
 
-local PROTECTED_KEYWORDS = {"Craft", "Station", "Portal", "Upgrade", "Shop", "Spawn", "Base"}
-
-local function isProtected(obj)
-    local name = obj.Name:lower()
-    for _, word in ipairs(PROTECTED_KEYWORDS) do
-        if name:find(word:lower()) then return true end
-    end
-    return false
-end
-
 local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-
--- Plot vinden op positie (werkt gegarandeerd)
-local myPlot = nil
 local root = char:WaitForChild("HumanoidRootPart")
+
+-- Plot vinden op positie
+local myPlot = nil
 if BasesFolder and root then
     local minDistance = math.huge
     for _, plot in ipairs(BasesFolder:GetChildren()) do
@@ -32,9 +22,16 @@ if BasesFolder and root then
     end
 end
 
-print(myPlot and "✅ Plot gevonden: " .. myPlot.Name or "⚠️ Geen plot gevonden!")
+print(myPlot and "✅ Plot: " .. myPlot.Name or "⚠️ Geen plot gevonden!")
 
--- Lighting optimaliseren maar zichtbaar houden
+-- Vloer herkenning
+local function isFloor(obj)
+    if not obj:IsA("BasePart") then return false end
+    local size = obj.Size
+    return size.X > 10 and size.Z > 10 and size.Y < 5
+end
+
+-- Lighting optimaliseren
 pcall(function()
     Lighting.Technology = Enum.Technology.Compatibility
     Lighting.GlobalShadows = false
@@ -59,11 +56,23 @@ pcall(function()
     workspace.Terrain.Decoration = false
 end)
 
--- Andere plots onzichtbaar maken + live connectie
+-- Jouw eigen base strippen behalve vloer
+if myPlot then
+    for _, obj in ipairs(myPlot:GetDescendants()) do
+        pcall(function()
+            if isFloor(obj) then
+                obj.CastShadow = false
+            else
+                obj:Destroy()
+            end
+        end)
+    end
+end
+
+-- Andere bases volledig strippen
 if BasesFolder then
     for _, plot in ipairs(BasesFolder:GetChildren()) do
         if plot ~= myPlot then
-            -- Live nieuwe objecten ook strippen
             plot.DescendantAdded:Connect(function(desc)
                 pcall(function()
                     if desc:IsA("BasePart") then
@@ -77,13 +86,9 @@ if BasesFolder then
                         or desc:IsA("Fire") or desc:IsA("Smoke")
                         or desc:IsA("Sparkles") then
                         desc.Enabled = false
-                    elseif desc:IsA("Sound") then
-                        desc.Volume = 0
                     end
                 end)
             end)
-
-            -- Alles wat er al in zit strippen
             for _, obj in ipairs(plot:GetDescendants()) do
                 pcall(function()
                     if obj:IsA("BasePart") then
@@ -102,19 +107,26 @@ if BasesFolder then
                     end
                 end)
             end
-            print("☠️ Plot gestript: " .. plot.Name)
         end
     end
 end
 
--- Workspace strippen (alles buiten Bases)
+-- Workspace strippen buiten Bases
+local PROTECTED_KEYWORDS = {"Craft", "Station", "Portal", "Upgrade", "Shop", "Spawn", "Base"}
+local function isProtected(obj)
+    local name = obj.Name:lower()
+    for _, word in ipairs(PROTECTED_KEYWORDS) do
+        if name:find(word:lower()) then return true end
+    end
+    return false
+end
+
 for _, obj in ipairs(workspace:GetChildren()) do
     if obj == char then continue end
     if obj == BasesFolder then continue end
     if obj:IsA("Terrain") then continue end
     if obj:IsA("Camera") then continue end
     if isProtected(obj) then continue end
-
     pcall(function()
         if obj:IsA("Folder") or obj:IsA("Model") or obj:IsA("BasePart") then
             obj:Destroy()
@@ -122,14 +134,46 @@ for _, obj in ipairs(workspace:GetChildren()) do
     end)
 end
 
--- Live strippen buiten Bases
+-- Animaties andere spelers uitzetten
+for _, player in ipairs(Players:GetPlayers()) do
+    if player ~= LocalPlayer then
+        local otherChar = player.Character
+        if otherChar then
+            for _, obj in ipairs(otherChar:GetDescendants()) do
+                pcall(function()
+                    if obj:IsA("Animator") then
+                        for _, track in ipairs(obj:GetPlayingAnimationTracks()) do
+                            track:Stop()
+                        end
+                    end
+                end)
+            end
+        end
+    end
+end
+
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function(otherChar)
+        task.wait(1)
+        for _, obj in ipairs(otherChar:GetDescendants()) do
+            pcall(function()
+                if obj:IsA("Animator") then
+                    for _, track in ipairs(obj:GetPlayingAnimationTracks()) do
+                        track:Stop()
+                    end
+                end
+            end)
+        end
+    end)
+end)
+
+-- Live strippen
 workspace.ChildAdded:Connect(function(obj)
     if obj == char then return end
     if obj == BasesFolder then return end
     if obj:IsA("Terrain") then return end
     if obj:IsA("Camera") then return end
     if isProtected(obj) then return end
-
     task.defer(function()
         pcall(function() obj:Destroy() end)
     end)
