@@ -1,11 +1,8 @@
--- ================================================
--- SEMI-AGGRESSIVE RENDER STRIP (Functionaliteit behouden)
--- ================================================
-
 local Players = game:GetService("Players")
+local Lighting = game:GetService("Lighting")
 local LocalPlayer = Players.LocalPlayer
+local BasesFolder = workspace:FindFirstChild("Bases")
 
--- Lijst met woorden die aangeven dat een object FUNCTIONEEL is (NIET verwijderen)
 local PROTECTED_KEYWORDS = {"Craft", "Station", "Portal", "Upgrade", "Shop", "Spawn", "Base"}
 
 local function isProtected(obj)
@@ -16,37 +13,131 @@ local function isProtected(obj)
     return false
 end
 
--- Vind jouw plot
-local myPlotFolder = workspace:FindFirstChild("Bases") and workspace.Bases:FindFirstChild(LocalPlayer.Name) -- Pas dit aan als je plot ID-gebaseerd is
+local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 
-print("🚀 Semi-Agressieve strip gestart...")
+-- Plot vinden op positie (werkt gegarandeerd)
+local myPlot = nil
+local root = char:WaitForChild("HumanoidRootPart")
+if BasesFolder and root then
+    local minDistance = math.huge
+    for _, plot in ipairs(BasesFolder:GetChildren()) do
+        local ref = plot:FindFirstChildWhichIsA("BasePart", true)
+        if ref then
+            local dist = (ref.Position - root.Position).Magnitude
+            if dist < minDistance then
+                minDistance = dist
+                myPlot = plot
+            end
+        end
+    end
+end
 
+print(myPlot and "✅ Plot gevonden: " .. myPlot.Name or "⚠️ Geen plot gevonden!")
+
+-- Lighting optimaliseren maar zichtbaar houden
+pcall(function()
+    Lighting.Technology = Enum.Technology.Compatibility
+    Lighting.GlobalShadows = false
+    Lighting.Brightness = 2
+    Lighting.ClockTime = 14
+    Lighting.OutdoorAmbient = Color3.fromRGB(100, 100, 100)
+    Lighting.Ambient = Color3.fromRGB(80, 80, 80)
+end)
+
+for _, e in ipairs(Lighting:GetChildren()) do
+    pcall(function()
+        if e:IsA("PostEffect") then e.Enabled = false end
+    end)
+end
+
+-- Terrain platleggen
+pcall(function()
+    workspace.Terrain.WaterWaveSize = 0
+    workspace.Terrain.WaterWaveSpeed = 0
+    workspace.Terrain.WaterReflectance = 0
+    workspace.Terrain.WaterTransparency = 1
+    workspace.Terrain.Decoration = false
+end)
+
+-- Andere plots onzichtbaar maken + live connectie
+if BasesFolder then
+    for _, plot in ipairs(BasesFolder:GetChildren()) do
+        if plot ~= myPlot then
+            -- Live nieuwe objecten ook strippen
+            plot.DescendantAdded:Connect(function(desc)
+                pcall(function()
+                    if desc:IsA("BasePart") then
+                        desc.Transparency = 1
+                        desc.CanCollide = false
+                        desc.CastShadow = false
+                    elseif desc:IsA("Decal") or desc:IsA("Texture") then
+                        desc.Transparency = 1
+                    elseif desc:IsA("ParticleEmitter") or desc:IsA("Beam")
+                        or desc:IsA("Light") or desc:IsA("Trail")
+                        or desc:IsA("Fire") or desc:IsA("Smoke")
+                        or desc:IsA("Sparkles") then
+                        desc.Enabled = false
+                    elseif desc:IsA("Sound") then
+                        desc.Volume = 0
+                    end
+                end)
+            end)
+
+            -- Alles wat er al in zit strippen
+            for _, obj in ipairs(plot:GetDescendants()) do
+                pcall(function()
+                    if obj:IsA("BasePart") then
+                        obj.Transparency = 1
+                        obj.CanCollide = false
+                        obj.CastShadow = false
+                    elseif obj:IsA("Decal") or obj:IsA("Texture") then
+                        obj.Transparency = 1
+                    elseif obj:IsA("ParticleEmitter") or obj:IsA("Beam")
+                        or obj:IsA("Light") or obj:IsA("Trail")
+                        or obj:IsA("Fire") or obj:IsA("Smoke")
+                        or obj:IsA("Sparkles") then
+                        obj.Enabled = false
+                    elseif obj:IsA("Sound") then
+                        obj.Volume = 0
+                    end
+                end)
+            end
+            print("☠️ Plot gestript: " .. plot.Name)
+        end
+    end
+end
+
+-- Workspace strippen (alles buiten Bases)
 for _, obj in ipairs(workspace:GetChildren()) do
-    -- 1. Bescherm je eigen karakter
-    if obj == LocalPlayer.Character then continue end
-    
-    -- 2. Bescherm jouw plot
-    if obj == myPlotFolder then continue end
-    
-    -- 3. Bescherm functionele objecten in de map
-    if isProtected(obj) then continue end
-    
-    -- 4. Bescherm Terrain
+    if obj == char then continue end
+    if obj == BasesFolder then continue end
     if obj:IsA("Terrain") then continue end
-    
-    -- 5. Vernietig de rest (decoratie, bomen, andere plots)
+    if obj:IsA("Camera") then continue end
+    if isProtected(obj) then continue end
+
     pcall(function()
         if obj:IsA("Folder") or obj:IsA("Model") or obj:IsA("BasePart") then
-            -- Als het een map met andere plots is, wis alleen plots die NIET de jouwe zijn
-            if obj.Name == "Bases" then
-                for _, otherPlot in ipairs(obj:GetChildren()) do
-                    if otherPlot ~= myPlotFolder then otherPlot:Destroy() end
-                end
-            else
-                obj:Destroy()
-            end
+            obj:Destroy()
         end
     end)
 end
 
-print("✅ Map gestript. Functionaliteit behouden.")
+-- Live strippen buiten Bases
+workspace.ChildAdded:Connect(function(obj)
+    if obj == char then return end
+    if obj == BasesFolder then return end
+    if obj:IsA("Terrain") then return end
+    if obj:IsA("Camera") then return end
+    if isProtected(obj) then return end
+
+    task.defer(function()
+        pcall(function() obj:Destroy() end)
+    end)
+end)
+
+-- Character respawn
+LocalPlayer.CharacterAdded:Connect(function(newChar)
+    char = newChar
+end)
+
+print("✅ Gestript!")
