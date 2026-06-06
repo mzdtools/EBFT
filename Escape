@@ -5,7 +5,8 @@ local LocalPlayer = Players.LocalPlayer
 local PROTECTED_KEYWORDS = {
     "craft", "station", "portal", "upgrade", "shop",
     "spawn", "gui", "camera", "script", "remote",
-    "bindable", "sound", "music", "ambient"
+    "bindable", "sound", "music", "ambient", "floor",
+    "base", "ground", "plate"
 }
 
 local function isProtected(obj)
@@ -22,15 +23,10 @@ local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local myPlot = nil
 local Bases = workspace:FindFirstChild("Bases")
 if Bases then
-    -- Methode 1: op naam
     myPlot = Bases:FindFirstChild(LocalPlayer.Name)
-
-    -- Methode 2: op UserId
     if not myPlot then
         myPlot = Bases:FindFirstChild(tostring(LocalPlayer.UserId))
     end
-
-    -- Methode 3: Owner value
     if not myPlot then
         for _, base in ipairs(Bases:GetChildren()) do
             local owner = base:FindFirstChild("Owner")
@@ -43,8 +39,6 @@ if Bases then
             end
         end
     end
-
-    -- Methode 4: dichtstbijzijnde base op positie
     if not myPlot then
         local root = char:WaitForChild("HumanoidRootPart")
         local minDist = math.huge
@@ -58,17 +52,10 @@ if Bases then
                 end
             end
         end
-        if myPlot then
-            print("✅ Plot gevonden op positie: " .. myPlot.Name)
-        end
     end
 end
 
-if myPlot then
-    print("✅ Jouw plot: " .. myPlot.Name)
-else
-    print("⚠️ Geen plot gevonden!")
-end
+print(myPlot and "✅ Plot: " .. myPlot.Name or "⚠️ Geen plot gevonden!")
 
 -- Lighting platleggen
 pcall(function()
@@ -97,6 +84,31 @@ pcall(function()
     workspace.Terrain.Decoration = false
 end)
 
+-- Strip andere plots maar bewaar collision
+local function stripPlot(plot)
+    for _, obj in ipairs(plot:GetDescendants()) do
+        pcall(function()
+            if obj:IsA("BasePart") or obj:IsA("MeshPart") or obj:IsA("UnionOperation") then
+                obj.Transparency = 1
+                obj.CastShadow = false
+                -- Geen CanCollide = false zodat je niet valt
+            elseif obj:IsA("Decal") or obj:IsA("Texture") then
+                obj.Transparency = 1
+            elseif obj:IsA("ParticleEmitter") or obj:IsA("Beam")
+                or obj:IsA("Trail") or obj:IsA("Fire")
+                or obj:IsA("Smoke") or obj:IsA("Sparkles") then
+                obj.Enabled = false
+            elseif obj:IsA("Light") then
+                obj.Enabled = false
+            elseif obj:IsA("Sound") then
+                obj.Volume = 0
+            elseif obj:IsA("BillboardGui") or obj:IsA("SurfaceGui") then
+                obj.Enabled = false
+            end
+        end)
+    end
+end
+
 -- Workspace strippen
 for _, obj in ipairs(workspace:GetChildren()) do
     if obj == char then continue end
@@ -109,7 +121,7 @@ for _, obj in ipairs(workspace:GetChildren()) do
         if obj.Name == "Bases" and Bases then
             for _, plot in ipairs(Bases:GetChildren()) do
                 if plot ~= myPlot then
-                    plot:Destroy()
+                    stripPlot(plot)
                 end
             end
         else
