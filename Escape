@@ -3,7 +3,7 @@ local Lighting = game:GetService("Lighting")
 local LocalPlayer = Players.LocalPlayer
 
 local PROTECTED_KEYWORDS = {
-    "craft", "station", "portal", "upgrade", "shop", 
+    "craft", "station", "portal", "upgrade", "shop",
     "spawn", "gui", "camera", "script", "remote",
     "bindable", "sound", "music", "ambient"
 }
@@ -22,24 +22,52 @@ local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local myPlot = nil
 local Bases = workspace:FindFirstChild("Bases")
 if Bases then
+    -- Methode 1: op naam
     myPlot = Bases:FindFirstChild(LocalPlayer.Name)
-    -- Fallback: zoek op UserId
+
+    -- Methode 2: op UserId
     if not myPlot then
         myPlot = Bases:FindFirstChild(tostring(LocalPlayer.UserId))
     end
-    -- Fallback: zoek op Owner value
+
+    -- Methode 3: Owner value
     if not myPlot then
         for _, base in ipairs(Bases:GetChildren()) do
             local owner = base:FindFirstChild("Owner")
                        or base:FindFirstChild("PlayerName")
                        or base:FindFirstChild("UserId")
-            if owner and (owner.Value == LocalPlayer.Name 
+            if owner and (owner.Value == LocalPlayer.Name
                 or owner.Value == tostring(LocalPlayer.UserId)) then
                 myPlot = base
                 break
             end
         end
     end
+
+    -- Methode 4: dichtstbijzijnde base op positie
+    if not myPlot then
+        local root = char:WaitForChild("HumanoidRootPart")
+        local minDist = math.huge
+        for _, base in ipairs(Bases:GetChildren()) do
+            local ref = base:FindFirstChildWhichIsA("BasePart", true)
+            if ref then
+                local dist = (ref.Position - root.Position).Magnitude
+                if dist < minDist then
+                    minDist = dist
+                    myPlot = base
+                end
+            end
+        end
+        if myPlot then
+            print("✅ Plot gevonden op positie: " .. myPlot.Name)
+        end
+    end
+end
+
+if myPlot then
+    print("✅ Jouw plot: " .. myPlot.Name)
+else
+    print("⚠️ Geen plot gevonden!")
 end
 
 -- Lighting platleggen
@@ -79,7 +107,6 @@ for _, obj in ipairs(workspace:GetChildren()) do
 
     pcall(function()
         if obj.Name == "Bases" and Bases then
-            -- Andere plots destroyen, eigen plot bewaren
             for _, plot in ipairs(Bases:GetChildren()) do
                 if plot ~= myPlot then
                     plot:Destroy()
@@ -91,7 +118,7 @@ for _, obj in ipairs(workspace:GetChildren()) do
     end)
 end
 
--- Live strippen van nieuwe objecten
+-- Live strippen
 workspace.ChildAdded:Connect(function(obj)
     if obj == char then return end
     if obj == myPlot then return end
