@@ -1,5 +1,5 @@
 -- =========================================================================
--- MzD ETFB RNG Farm — ALL IN ONE v4
+-- MzD ETFB RNG Farm — ALL IN ONE v4 (FIXED FOR DELTA/LDPLAYER9)
 -- Zwart · Wit · Eerste letter/cijfer lichtblauw · Rode border
 -- =========================================================================
 local Players           = game:GetService("Players")
@@ -9,14 +9,12 @@ local RunService        = game:GetService("RunService")
 local StarterGui        = game:GetService("StarterGui")
 local LocalPlayer       = Players.LocalPlayer
 
-_G.MzDRolls = _G.MzDRolls or 0
+getgenv().MzDRolls = getgenv().MzDRolls or 0 -- Aangepast naar getgenv() voor betere executor compatibiliteit
 
 local ClientGlobals, RNGConfig, BrainrotModule
 
 -- =========================================================================
 -- KLEUREN & RICHTEXT HELPER
--- Eerste ASCII letter of cijfer → lichtblauw, rest → wit
--- Werkt correct met emoji (multi-byte bytes worden overgeslagen)
 -- =========================================================================
 local WHITE  = Color3.new(1, 1, 1)
 local RED    = Color3.fromRGB(220, 50, 50)
@@ -38,11 +36,11 @@ local function cf(text)
 end
 
 -- =========================================================================
--- ROBLOX MENU VERBERGEN
+-- ROBLOX MENU VERBERGEN (UITGESCHAKELD VOOR DELTA STABILITEIT)
 -- =========================================================================
-pcall(function()
-    StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, false)
-end)
+-- pcall(function()
+--     StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, false)
+-- end)
 
 -- =========================================================================
 -- CHARACTER + SLIMME AUTO-UNEQUIP
@@ -90,7 +88,8 @@ gui.Name           = "MzDFarmHUD"
 gui.ResetOnSpawn   = false
 gui.IgnoreGuiInset = true
 gui.DisplayOrder   = 999
-gui.Parent         = LocalPlayer.PlayerGui
+-- Bescherm de GUI als de executor gethui() ondersteunt, anders gwn PlayerGui
+gui.Parent         = (pcall(function() return gethui() end) and gethui()) or LocalPlayer:WaitForChild("PlayerGui")
 
 local bg = Instance.new("Frame")
 bg.Size             = UDim2.new(1, 0, 1, 0)
@@ -108,15 +107,18 @@ loadLbl.TextScaled         = true
 loadLbl.Font               = Enum.Font.GothamBold
 loadLbl.Parent             = bg
 
-task.wait(10)
-loadLbl:Destroy()
+task.wait(1) -- Laadtijd ingekort voor snellere feedback
 
 -- =========================================================================
--- MODULES LADEN
+-- MODULES LADEN (GEFIXED MET WAITFORCHILD)
 -- =========================================================================
-ClientGlobals  = require(ReplicatedStorage.Client.Modules.ClientGlobals)
-RNGConfig      = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"):WaitForChild("RNGUpgrades"))
-BrainrotModule = require(ReplicatedStorage.SharedModules.BrainrotModule)
+print("[MzD] Modules laden...")
+ClientGlobals  = require(ReplicatedStorage:WaitForChild("Client"):WaitForChild("Modules"):WaitForChild("ClientGlobals", 10))
+RNGConfig      = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"):WaitForChild("RNGUpgrades", 10))
+BrainrotModule = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("BrainrotModule", 10))
+print("[MzD] Modules succesvol geladen!")
+
+loadLbl:Destroy()
 
 -- =========================================================================
 -- LIGHTING → ZWART
@@ -339,7 +341,8 @@ local eventLbl = makeRow("Events: geen", WHITE, 0.07)
 -- DATA HELPERS
 -- =========================================================================
 local function getData()
-    return ClientGlobals.PlayerData and ClientGlobals.PlayerData.Data
+    if not ClientGlobals or not ClientGlobals.PlayerData then return nil end
+    return ClientGlobals.PlayerData.Data
 end
 
 local function getDiceCount(diceType)
@@ -357,7 +360,7 @@ end
 local function isUpgradeMaxed(name)
     local data = getData()
     local level = (data and data.RNGUpgrades and data.RNGUpgrades[name]) or 0
-    local cfg = RNGConfig.Upgrades[name]
+    local cfg = RNGConfig and RNGConfig.Upgrades and RNGConfig.Upgrades[name]
     return cfg and level >= cfg.MaxLevel
 end
 
@@ -367,7 +370,9 @@ local function countCollectedRarity(targetRarity)
     local count = 0
     for _, brainrots in pairs(data.CollectedBrainrots) do
         for name, _ in pairs(brainrots) do
-            if BrainrotModule.BrainrotRarities[name] == targetRarity then count += 1 end
+            if BrainrotModule and BrainrotModule.BrainrotRarities and BrainrotModule.BrainrotRarities[name] == targetRarity then 
+                count += 1 
+            end
         end
     end
     return count
@@ -375,7 +380,7 @@ end
 
 local function getActiveEvents()
     local parts = {}
-    local activeData = ClientGlobals.ActiveEvents and ClientGlobals.ActiveEvents.Data
+    local activeData = ClientGlobals and ClientGlobals.ActiveEvents and ClientGlobals.ActiveEvents.Data
     if activeData then
         local short = {RollFrenzyEvent="RollFrenzy", Dice777Event="777", Jackpot="Jackpot"}
         for eventName, endTime in pairs(activeData) do
@@ -403,7 +408,7 @@ task.spawn(function()
             local e = tick() - startTime
             timeLbl.Text  = cf(string.format("%02d:%02d:%02d",
                 math.floor(e/3600), math.floor((e%3600)/60), math.floor(e%60)))
-            rollsLbl.Text = cf("Rolls: " .. (_G.MzDRolls or 0))
+            rollsLbl.Text = cf("Rolls: " .. (getgenv().MzDRolls or 0))
 
             normalLbl.Text  = cf("Normal: "  .. getDiceCount("Normal"))
             fireLbl.Text    = cf("Fire: "    .. getDiceCount("Fire"))
@@ -438,4 +443,4 @@ task.spawn(function()
     end
 end)
 
-print("✅ MzD All-In-One v4 actief")
+print("✅ MzD All-In-One v4 (FIXED) actief")
