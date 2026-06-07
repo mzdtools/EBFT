@@ -1,131 +1,20 @@
-local Players = game:GetService("Players")
-local Lighting = game:GetService("Lighting")
-local LocalPlayer = Players.LocalPlayer
-local BasesFolder = workspace:FindFirstChild("Bases")
-
 -- ==========================================
--- FIX: CharacterAdded bovenaan zodat char
--- nooit zichzelf destroyed bij respawn
--- ==========================================
-local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-local root = char:WaitForChild("HumanoidRootPart")
-
-LocalPlayer.CharacterAdded:Connect(function(newChar)
-    char = newChar
-    root = newChar:WaitForChild("HumanoidRootPart")
-end)
-
--- ==========================================
--- FIX: Extra wachttijd voor trage clients
--- 15 FPS / 240x180 / auto-execute = game
--- laadt langzamer, BasesFolder en plot
--- zijn mogelijk nog niet klaar.
--- ==========================================
-local LOAD_WAIT = 4  -- seconden extra wachten bij auto-execute
-
-print("⏳ Wachten op laden... (" .. LOAD_WAIT .. "s)")
-task.wait(LOAD_WAIT)
-
--- BasesFolder opnieuw ophalen na wachttijd
-BasesFolder = workspace:WaitForChild("Bases", 20)
-if not BasesFolder then
-    warn("⚠️ Bases folder niet gevonden na wachttijd!")
-end
-
--- Zeker weten dat character klaar is
-char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-root = char:WaitForChild("HumanoidRootPart")
-
--- ==========================================
--- Plot vinden op positie
--- ==========================================
-local myPlot = nil
-if BasesFolder and root then
-    local minDistance = math.huge
-    for _, plot in ipairs(BasesFolder:GetChildren()) do
-        local ref = plot:FindFirstChildWhichIsA("BasePart", true)
-        if ref then
-            local dist = (ref.Position - root.Position).Magnitude
-            if dist < minDistance then
-                minDistance = dist
-                myPlot = plot
-            end
-        end
-    end
-end
-
-print(myPlot and "✅ Plot: " .. myPlot.Name or "⚠️ Geen plot gevonden!")
-
--- ==========================================
--- Vloer herkenning
--- ==========================================
-local function isFloor(obj)
-    if not obj:IsA("BasePart") then return false end
-    local size = obj.Size
-    return size.X > 10 and size.Z > 10 and size.Y < 5
-end
-
--- ==========================================
--- Protected keywords check
--- ==========================================
-local PROTECTED_KEYWORDS = {"Craft", "Station", "Portal", "Upgrade", "Shop", "Spawn", "Base"}
-local function isProtected(obj)
-    local name = obj.Name:lower()
-    for _, word in ipairs(PROTECTED_KEYWORDS) do
-        if name:find(word:lower()) then return true end
-    end
-    return false
-end
-
--- ==========================================
--- Lighting optimaliseren
--- ==========================================
-pcall(function()
-    Lighting.Technology = Enum.Technology.Compatibility
-    Lighting.GlobalShadows = false
-    Lighting.Brightness = 2
-    Lighting.ClockTime = 14
-    Lighting.OutdoorAmbient = Color3.fromRGB(100, 100, 100)
-    Lighting.Ambient = Color3.fromRGB(80, 80, 80)
-end)
-
-for _, e in ipairs(Lighting:GetChildren()) do
-    pcall(function()
-        if e:IsA("PostEffect") then e.Enabled = false end
-    end)
-end
-
--- ==========================================
--- Terrain platleggen
--- ==========================================
-pcall(function()
-    workspace.Terrain.WaterWaveSize = 0
-    workspace.Terrain.WaterWaveSpeed = 0
-    workspace.Terrain.WaterReflectance = 0
-    workspace.Terrain.WaterTransparency = 1
-    workspace.Terrain.Decoration = false
-end)
-
--- ==========================================
--- Jouw eigen base strippen behalve vloer
--- FIX: isProtected() check toegevoegd zodat
--- CraftStations etc. in je eigen plot
--- niet worden destroyed
+-- Jouw eigen base VISUEEL strippen (Niet slopen!)
 -- ==========================================
 if myPlot then
     for _, obj in ipairs(myPlot:GetDescendants()) do
         pcall(function()
-            if isFloor(obj) or isProtected(obj) then
+            if obj:IsA("BasePart") then
                 obj.CastShadow = false
-            else
-                obj:Destroy()
+                -- We gebruiken GEEN Destroy(). Zo behoud je je eigen base intact, 
+                -- maar het kost je GPU geen moeite meer om schaduwen te renderen.
             end
         end)
     end
 end
 
 -- ==========================================
--- Andere bases volledig strippen
+-- Andere bases onzichtbaar maken (Geen Collision)
 -- ==========================================
 if BasesFolder then
     for _, plot in ipairs(BasesFolder:GetChildren()) do
@@ -134,7 +23,7 @@ if BasesFolder then
                 pcall(function()
                     if desc:IsA("BasePart") then
                         desc.Transparency = 1
-                        desc.CanCollide = false
+                        desc.CanCollide = false -- Mag hier wel uit, want je bent niet in andermans base
                         desc.CastShadow = false
                     elseif desc:IsA("Decal") or desc:IsA("Texture") then
                         desc.Transparency = 1
@@ -169,7 +58,7 @@ if BasesFolder then
 end
 
 -- ==========================================
--- Workspace strippen buiten Bases
+-- Workspace strippen buiten Bases (VEILIG)
 -- ==========================================
 for _, obj in ipairs(workspace:GetChildren()) do
     if obj == char then continue end
@@ -177,9 +66,24 @@ for _, obj in ipairs(workspace:GetChildren()) do
     if obj:IsA("Terrain") then continue end
     if obj:IsA("Camera") then continue end
     if isProtected(obj) then continue end
+    
     pcall(function()
-        if obj:IsA("Folder") or obj:IsA("Model") or obj:IsA("BasePart") then
-            obj:Destroy()
+        -- In plaats van de lobby/map te Destroyen, maken we hem onzichtbaar.
+        -- We laten collision AAN, zodat je niet door de map valt.
+        if obj:IsA("BasePart") then
+            obj.Transparency = 1
+            obj.CastShadow = false
+        end
+        for _, desc in ipairs(obj:GetDescendants()) do
+            if desc:IsA("BasePart") then
+                desc.Transparency = 1
+                desc.CastShadow = false
+                -- desc.CanCollide blijft intact!
+            elseif desc:IsA("Decal") or desc:IsA("Texture") then
+                desc.Transparency = 1
+            elseif desc:IsA("ParticleEmitter") or desc:IsA("Beam") or desc:IsA("Light") then
+                desc.Enabled = false
+            end
         end
     end)
 end
@@ -220,7 +124,7 @@ Players.PlayerAdded:Connect(function(player)
 end)
 
 -- ==========================================
--- Live strippen
+-- Live strippen (Minder agressief)
 -- ==========================================
 workspace.ChildAdded:Connect(function(obj)
     if obj == char then return end
@@ -228,9 +132,22 @@ workspace.ChildAdded:Connect(function(obj)
     if obj:IsA("Terrain") then return end
     if obj:IsA("Camera") then return end
     if isProtected(obj) then return end
+    
     task.defer(function()
-        pcall(function() obj:Destroy() end)
+        pcall(function() 
+            -- Nieuwe objecten maken we visueel leeg, maar we slopen ze niet.
+            if obj:IsA("BasePart") then
+                obj.Transparency = 1
+                obj.CastShadow = false
+            end
+            for _, desc in ipairs(obj:GetDescendants()) do
+                if desc:IsA("BasePart") then
+                    desc.Transparency = 1
+                    desc.CastShadow = false
+                end
+            end
+        end)
     end)
 end)
 
-print("✅ Gestript!")
+print("✅ Gestript zonder in de void te vallen!")
