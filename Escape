@@ -1,6 +1,6 @@
 -- ==========================================
--- MzD ETFB RNG Farm — ALL IN ONE
--- Optimalisatie + HUD + Zwart scherm
+-- MzD ETFB RNG Farm — ALL IN ONE (FINAL v4 - HARDCORE OPTI)
+-- Volledige Destroy Opti + HUD + Zwart scherm + Event Logic
 -- ==========================================
 local Players           = game:GetService("Players")
 local Lighting          = game:GetService("Lighting")
@@ -8,15 +8,14 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService        = game:GetService("RunService")
 local LocalPlayer       = Players.LocalPlayer
 
--- Modules (laden zodra game klaar is)
+-- Modules (veilig laden)
 local ClientGlobals, RNGConfig, BrainrotModule
 
--- Globale roll counter (gedeeld met MasterScript)
+-- Globale roll counter
 _G.MzDRolls = _G.MzDRolls or 0
 
 -- ==========================================
--- FIX: CharacterAdded BOVENAAN
--- Voorkomt dat char zichzelf destroyed bij respawn
+-- CHARACTER & CAMERA SETUP (3D RENDERING STOPPEN)
 -- ==========================================
 local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local root = char:WaitForChild("HumanoidRootPart")
@@ -26,10 +25,6 @@ LocalPlayer.CharacterAdded:Connect(function(newChar)
     root = newChar:WaitForChild("HumanoidRootPart")
 end)
 
--- ==========================================
--- CAMERA: Ondergronds → 3D rendering stopt
--- RenderStepped houdt hem daar
--- ==========================================
 local camera = workspace.CurrentCamera
 camera.CameraType = Enum.CameraType.Scriptable
 camera.CFrame = CFrame.new(0, -50000, 0)
@@ -42,8 +37,7 @@ RunService.RenderStepped:Connect(function()
 end)
 
 -- ==========================================
--- HUD: Opzetten VOOR de laadwachttijd
--- Zodat de zwarte overlay meteen zichtbaar is
+-- HUD INITIEEL (Zwart scherm direct laden)
 -- ==========================================
 local gui = Instance.new("ScreenGui")
 gui.Name           = "MzDFarmHUD"
@@ -52,48 +46,85 @@ gui.IgnoreGuiInset = true
 gui.DisplayOrder   = 999
 gui.Parent         = LocalPlayer.PlayerGui
 
--- Zwarte achtergrond
 local bg = Instance.new("Frame")
 bg.Size             = UDim2.new(1, 0, 1, 0)
 bg.BackgroundColor3 = Color3.new(0, 0, 0)
 bg.BorderSizePixel  = 0
-bg.Parent           = gui
+bg.Parent            = gui
 
--- Laadscherm tekst
 local loadLbl = Instance.new("TextLabel")
 loadLbl.Size               = UDim2.new(1, 0, 1, 0)
 loadLbl.BackgroundTransparency = 1
-loadLbl.Text               = "⏳ MzD Farm laden..."
+loadLbl.Text               = "⏳ MzD Hardcore Opti v4 laden..."
 loadLbl.TextColor3         = Color3.fromRGB(255, 215, 0)
 loadLbl.TextScaled         = true
 loadLbl.Font               = Enum.Font.GothamBold
 loadLbl.Parent             = gui
 
--- ==========================================
--- WACHTTIJD (trage client / auto-execute)
--- ==========================================
-local LOAD_WAIT = 10
-print("⏳ Wachten op laden... (" .. LOAD_WAIT .. "s)")
+local LOAD_WAIT = 5
 task.wait(LOAD_WAIT)
+
+pcall(function()
+    ClientGlobals  = require(ReplicatedStorage:WaitForChild("Client"):WaitForChild("Modules"):WaitForChild("ClientGlobals"))
+    RNGConfig      = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"):WaitForChild("RNGUpgrades"))
+    BrainrotModule = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("BrainrotModule"))
+end)
+
 loadLbl:Destroy()
 
 -- ==========================================
--- MODULES LADEN (na wachttijd)
+-- LIGHTING & TERRAIN VOLLEDIG VERNIETIGEN / UIT
 -- ==========================================
-ClientGlobals  = require(ReplicatedStorage.Client.Modules.ClientGlobals)
-RNGConfig      = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"):WaitForChild("RNGUpgrades"))
-BrainrotModule = require(ReplicatedStorage.SharedModules.BrainrotModule)
+pcall(function()
+    for _, obj in ipairs(Lighting:GetChildren()) do
+        obj:Destroy()
+    end
+    Lighting.Technology     = Enum.Technology.Compatibility
+    Lighting.GlobalShadows  = false
+    Lighting.Brightness     = 0
+    
+    workspace.Terrain.WaterWaveSize    = 0
+    workspace.Terrain.WaterWaveSpeed    = 0
+    workspace.Terrain.WaterReflectance = 0
+    workspace.Terrain.WaterTransparency = 1
+    workspace.Terrain.Decoration       = false
+    workspace.Terrain:Clear() -- Leegt het terrein voor maximale FPS
+end)
+
+-- PROTECTED FILTER (Dit mag NOOIT weg)
+local PROTECTED = {"Craft","Station","Portal","Upgrade","Shop","Spawn","Base","Vloer","Floor","HumanoidRootPart"}
+local function isProtected(obj)
+    local name = obj.Name:lower()
+    for _, word in ipairs(PROTECTED) do
+        if name:find(word:lower()) then return true end
+    end
+    return false
+end
 
 -- ==========================================
--- BASES & PLOT
+-- HARDCORE DESTROY FUNCTION (Ontlast de GPU maximaal)
 -- ==========================================
-local BasesFolder = workspace:WaitForChild("Bases", 20)
-if not BasesFolder then warn("⚠️ Bases folder niet gevonden!") end
+local function hardcoreDestroy(obj)
+    pcall(function()
+        if obj == char or isProtected(obj) then return end
+        
+        -- Als het een speler is, laat alleen de RootPart staan tegen crashes
+        if obj:IsA("Model") and Players:GetPlayerFromCharacter(obj) then
+            for _, part in ipairs(obj:GetChildren()) do
+                if part.Name ~= "HumanoidRootPart" then part:Destroy() end
+            end
+            return
+        end
+        
+        obj:Destroy()
+    end)
+end
 
-char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-root = char:WaitForChild("HumanoidRootPart")
-
+-- Bestaande mappen en objecten in workspace hard opschonen
+local BasesFolder = workspace:FindFirstChild("Bases")
 local myPlot = nil
+
+-- Zoek eerst je eigen plot zodat we die niet slopen
 if BasesFolder and root then
     local minDist = math.huge
     for _, plot in ipairs(BasesFolder:GetChildren()) do
@@ -107,206 +138,55 @@ if BasesFolder and root then
         end
     end
 end
-print(myPlot and "✅ Plot: " .. myPlot.Name or "⚠️ Geen plot gevonden!")
 
--- ==========================================
--- LIGHTING → ZWART (HUD heeft prioriteit)
--- ==========================================
-pcall(function()
-    for _, obj in ipairs(Lighting:GetChildren()) do
-        if obj:IsA("Sky") then obj:Destroy() end
-        if obj:IsA("PostEffect") then obj.Enabled = false end
-    end
-    Lighting.Technology     = Enum.Technology.Compatibility
-    Lighting.GlobalShadows  = false
-    Lighting.Brightness     = 0
-    Lighting.OutdoorAmbient = Color3.new(0, 0, 0)
-    Lighting.Ambient        = Color3.new(0, 0, 0)
-    Lighting.FogEnd         = 1
-    Lighting.FogColor       = Color3.new(0, 0, 0)
-end)
-
--- ==========================================
--- TERRAIN
--- ==========================================
-pcall(function()
-    workspace.Terrain.WaterWaveSize    = 0
-    workspace.Terrain.WaterWaveSpeed   = 0
-    workspace.Terrain.WaterReflectance = 0
-    workspace.Terrain.WaterTransparency = 1
-    workspace.Terrain.Decoration       = false
-end)
-
--- ==========================================
--- PROTECTED KEYWORDS
--- ==========================================
-local PROTECTED = {"Craft","Station","Portal","Upgrade","Shop","Spawn","Base"}
-local function isProtected(obj)
-    local name = obj.Name:lower()
-    for _, word in ipairs(PROTECTED) do
-        if name:find(word:lower()) then return true end
-    end
-    return false
-end
-
--- ==========================================
--- EIGEN BASE STRIPPEN (geen vloer destroy!)
--- ==========================================
-if myPlot then
-    for _, obj in ipairs(myPlot:GetDescendants()) do
-        pcall(function()
-            if isProtected(obj) then
-                if obj:IsA("BasePart") then obj.CastShadow = false end
-            elseif obj:IsA("Decal") or obj:IsA("Texture") or obj:IsA("SpecialMesh")
-                or obj:IsA("CharacterMesh") or obj:IsA("Accessory") then
-                obj:Destroy()
-            elseif obj:IsA("ParticleEmitter") or obj:IsA("Beam")
-                or obj:IsA("Fire") or obj:IsA("Smoke") or obj:IsA("Sparkles") then
-                obj:Destroy()
-            elseif obj:IsA("BasePart") then
-                obj.CastShadow = false
-                obj.Material   = Enum.Material.SmoothPlastic
-            end
-        end)
-    end
-end
-
--- ==========================================
--- ANDERE BASES STRIPPEN
--- ==========================================
-if BasesFolder then
-    for _, plot in ipairs(BasesFolder:GetChildren()) do
-        if plot ~= myPlot then
-            plot.DescendantAdded:Connect(function(desc)
-                pcall(function()
-                    if desc:IsA("BasePart") then
-                        desc.Transparency = 1
-                        desc.CanCollide   = false
-                        desc.CastShadow   = false
-                    elseif desc:IsA("Decal") or desc:IsA("Texture") then
-                        desc.Transparency = 1
-                    elseif desc:IsA("ParticleEmitter") or desc:IsA("Beam")
-                        or desc:IsA("Light") or desc:IsA("Trail")
-                        or desc:IsA("Fire") or desc:IsA("Smoke")
-                        or desc:IsA("Sparkles") then
-                        desc.Enabled = false
-                    end
-                end)
-            end)
-            for _, obj in ipairs(plot:GetDescendants()) do
-                pcall(function()
-                    if obj:IsA("BasePart") then
-                        obj.Transparency = 1
-                        obj.CanCollide   = false
-                        obj.CastShadow   = false
-                    elseif obj:IsA("Decal") or obj:IsA("Texture") then
-                        obj.Transparency = 1
-                    elseif obj:IsA("ParticleEmitter") or obj:IsA("Beam")
-                        or obj:IsA("Light") or obj:IsA("Trail")
-                        or obj:IsA("Fire") or obj:IsA("Smoke")
-                        or obj:IsA("Sparkles") then
-                        obj.Enabled = false
-                    elseif obj:IsA("Sound") then
-                        obj.Volume = 0
-                    end
-                end)
-            end
-        end
-    end
-end
-
--- ==========================================
--- WORKSPACE STRIPPEN
--- ==========================================
+-- Gooi alle andere plots en workspace rommel direct in de prullenbak
 for _, obj in ipairs(workspace:GetChildren()) do
-    if obj == char then continue end
-    if obj == BasesFolder then continue end
-    if obj:IsA("Terrain") then continue end
-    if obj:IsA("Camera") then continue end
-    if isProtected(obj) then continue end
-    pcall(function()
-        if obj:IsA("BasePart") and (obj.Size.X > 100 or obj.Size.Z > 100) then
-            obj.Transparency = 1
-            obj.CastShadow   = false
-        elseif obj:IsA("Folder") or obj:IsA("Model") or obj:IsA("BasePart") then
-            obj:Destroy()
-        end
-    end)
-end
-
--- ==========================================
--- ANIMATIES ANDERE SPELERS UIT
--- ==========================================
-for _, player in ipairs(Players:GetPlayers()) do
-    if player ~= LocalPlayer then
-        local otherChar = player.Character
-        if otherChar then
-            for _, obj in ipairs(otherChar:GetDescendants()) do
-                pcall(function()
-                    if obj:IsA("Animator") then
-                        for _, track in ipairs(obj:GetPlayingAnimationTracks()) do
-                            track:Stop()
-                        end
-                    end
-                end)
+    if obj == char or obj == workspace.Terrain or obj:IsA("Camera") then continue end
+    
+    if obj == BasesFolder then
+        for _, plot in ipairs(BasesFolder:GetChildren()) do
+            if plot ~= myPlot then
+                plot:Destroy() -- Andere plots compleet wegvagen!
             end
         end
+    else
+        hardcoreDestroy(obj)
     end
 end
 
-Players.PlayerAdded:Connect(function(player)
-    player.CharacterAdded:Connect(function(otherChar)
-        task.wait(1)
-        for _, obj in ipairs(otherChar:GetDescendants()) do
-            pcall(function()
-                if obj:IsA("Animator") then
-                    for _, track in ipairs(obj:GetPlayingAnimationTracks()) do
-                        track:Stop()
-                    end
-                end
-            end)
-        end
+-- Live spawn-blocker: Alles wat nieuw binnenkomt meteen DESTROYEN
+workspace.ChildAdded:Connect(function(obj)
+    task.defer(function()
+        hardcoreDestroy(obj)
     end)
 end)
 
--- ==========================================
--- LIVE STRIPPEN
--- ==========================================
-workspace.ChildAdded:Connect(function(obj)
-    if obj == char then return end
-    if obj == BasesFolder then return end
-    if obj:IsA("Terrain") then return end
-    if obj:IsA("Camera") then return end
-    if isProtected(obj) then return end
-    task.defer(function()
-        pcall(function()
-            if obj:IsA("BasePart") and (obj.Size.X > 100 or obj.Size.Z > 100) then
-                obj.Transparency = 1
-            else
-                obj:Destroy()
-            end
+if BasesFolder then
+    BasesFolder.ChildAdded:Connect(function(obj)
+        task.defer(function()
+            if obj ~= myPlot then obj:Destroy() end
         end)
     end)
-end)
+end
 
-print("✅ Wereld gestript!")
+print("🔥 GPU MAXIMAAL ONTLAST: Alles vernietigd!")
 
 -- ==========================================
--- HUD OPBOUWEN (na laden)
+-- HUD UI GENEREREN
 -- ==========================================
 local main = Instance.new("Frame")
 main.Size                   = UDim2.new(0.96, 0, 0.96, 0)
 main.Position               = UDim2.new(0.02, 0, 0.02, 0)
 main.BackgroundTransparency = 1
 main.ClipsDescendants       = true
-main.Parent                 = gui
+main.Parent                  = gui
 
 local listLayout = Instance.new("UIListLayout")
 listLayout.FillDirection       = Enum.FillDirection.Vertical
 listLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 listLayout.SortOrder           = Enum.SortOrder.LayoutOrder
-listLayout.Padding             = UDim.new(0.004, 0)
-listLayout.Parent              = main
+listLayout.Padding              = UDim.new(0.004, 0)
+listLayout.Parent               = main
 
 local _idx = 0
 local function makeRow(text, color, yScale)
@@ -315,7 +195,7 @@ local function makeRow(text, color, yScale)
     f.Size                   = UDim2.new(1, 0, yScale or 0.075, 0)
     f.BackgroundTransparency = 1
     f.LayoutOrder            = _idx
-    f.Parent                 = main
+    f.Parent                  = main
     local lbl = Instance.new("TextLabel")
     lbl.Size                   = UDim2.new(1, 0, 1, 0)
     lbl.BackgroundTransparency = 1
@@ -323,7 +203,6 @@ local function makeRow(text, color, yScale)
     lbl.TextColor3             = color or Color3.new(1,1,1)
     lbl.TextScaled             = true
     lbl.Font                   = Enum.Font.GothamBold
-    lbl.TextXAlignment         = Enum.TextXAlignment.Center
     lbl.Parent                 = f
     return lbl
 end
@@ -334,7 +213,7 @@ local function makeRow2(tL, cL, tR, cR, yScale)
     f.Size                   = UDim2.new(1, 0, yScale or 0.065, 0)
     f.BackgroundTransparency = 1
     f.LayoutOrder            = _idx
-    f.Parent                 = main
+    f.Parent                  = main
     local lL = Instance.new("TextLabel")
     lL.Size                   = UDim2.new(0.5, 0, 1, 0)
     lL.BackgroundTransparency = 1
@@ -342,7 +221,6 @@ local function makeRow2(tL, cL, tR, cR, yScale)
     lL.TextColor3             = cL or Color3.new(1,1,1)
     lL.TextScaled             = true
     lL.Font                   = Enum.Font.GothamBold
-    lL.TextXAlignment         = Enum.TextXAlignment.Center
     lL.Parent                 = f
     local lR = Instance.new("TextLabel")
     lR.Size                   = UDim2.new(0.5, 0, 1, 0)
@@ -352,7 +230,6 @@ local function makeRow2(tL, cL, tR, cR, yScale)
     lR.TextColor3             = cR or Color3.new(1,1,1)
     lR.TextScaled             = true
     lR.Font                   = Enum.Font.GothamBold
-    lR.TextXAlignment         = Enum.TextXAlignment.Center
     lR.Parent                 = f
     return lL, lR
 end
@@ -367,71 +244,48 @@ local function makeDivider()
     f.Parent           = main
 end
 
-local function makeHeader(text)
-    return makeRow(text, Color3.fromRGB(90, 90, 90), 0.05)
-end
-
--- Layout
-makeRow("MzD ETFB RNG Farm", Color3.fromRGB(255, 215, 0), 0.10)
+makeRow("MzD ETFB RNG Farm (Hardcore Opti)", Color3.fromRGB(255, 215, 0), 0.10)
 makeDivider()
-local timeLbl, rollsLbl = makeRow2(
-    "⏱ 00:00:00", Color3.fromRGB(140, 200, 255),
-    "🎲 Rolls: 0",  Color3.fromRGB(140, 200, 255), 0.07)
+local timeLbl, rollsLbl = makeRow2("⏱ 00:00:00", Color3.fromRGB(140, 200, 255), "🎲 Rolls: 0",  Color3.fromRGB(140, 200, 255), 0.07)
 makeDivider()
-makeHeader("─ DICE BUFFS ─")
 local buffLbl = makeRow("geen", Color3.fromRGB(255, 180, 80), 0.065)
 makeDivider()
-makeHeader("─ INVENTORY ─")
 local normalLbl,  fireLbl    = makeRow2("Normal: 0",  Color3.fromRGB(210,210,210), "Fire: 0",    Color3.fromRGB(255,140,0),   0.065)
 local goldLbl,    rainbowLbl = makeRow2("Gold: 0",    Color3.fromRGB(255,215,0),   "Rainbow: 0", Color3.fromRGB(100,255,200), 0.065)
 local megaLbl = makeRow("MegaRainbow: 0", Color3.fromRGB(80,80,80), 0.075)
 makeDivider()
-local infLbl, etLbl = makeRow2(
-    "♾ Infinity: 0", Color3.fromRGB(255, 80, 80),
-    "✨ Eternal: 0",  Color3.fromRGB(255, 215, 0), 0.07)
-local usedLbl = makeRow("🎯 Mega gebruikt: 0", Color3.fromRGB(200, 150, 255), 0.065)
+local infLbl, etLbl = makeRow2("♾ Infinity: 0", Color3.fromRGB(255, 80, 80), "✨ Eternal: 0",  Color3.fromRGB(255, 215, 0), 0.07)
+local usedLbl = makeRow("🎯 Strategie status: Standby", Color3.fromRGB(200, 150, 255), 0.065)
 makeDivider()
 local upgradeLbl = makeRow("UPGRADES: controleren...", Color3.fromRGB(220,220,220), 0.065)
 makeDivider()
-makeHeader("─ EVENTS ─")
 local eventLbl = makeRow("geen", Color3.fromRGB(150, 255, 150), 0.065)
 
 -- ==========================================
--- DATA HELPERS
+-- DATA HELPERS & STRATEGIE LOGICA
 -- ==========================================
 local function getData()
-    return ClientGlobals.PlayerData and ClientGlobals.PlayerData.Data
+    return ClientGlobals and ClientGlobals.PlayerData and ClientGlobals.PlayerData.Data
 end
 
-local function getDiceCount(diceType)
-    local data = getData()
-    if not data or not data.Inventory then return 0 end
-    local count = 0
-    for _, item in pairs(data.Inventory) do
-        if item.sub and item.sub.diceType == diceType then
-            count = count + (type(item.sub.amount) == "number" and item.sub.amount or 1)
-        end
+local function getAbsoluteRolls()
+    local leaderstats = LocalPlayer:FindFirstChild("leaderstats")
+    if leaderstats then
+        local r = leaderstats:FindFirstChild("Rolls") or leaderstats:FindFirstChild("Total Rolls")
+        if r then return r.Value end
     end
-    return count
-end
-
-local function getUpgradeLevel(name)
     local data = getData()
-    return (data and data.RNGUpgrades and data.RNGUpgrades[name]) or 0
-end
-
-local function isUpgradeMaxed(name)
-    local cfg = RNGConfig.Upgrades[name]
-    return cfg and getUpgradeLevel(name) >= cfg.MaxLevel
+    if data then return data.Rolls or data.TotalRolls or data.RollCount or _G.MzDRolls or 0 end
+    return _G.MzDRolls or 0
 end
 
 local function countCollectedRarity(targetRarity)
     local data = getData()
-    if not data or not data.CollectedBrainrots then return 0 end
+    if not data or not data.CollectedBrainrots or not BrainrotModule then return 0 end
     local count = 0
     for _, brainrots in pairs(data.CollectedBrainrots) do
         for name, _ in pairs(brainrots) do
-            if BrainrotModule.BrainrotRarities[name] == targetRarity then
+            if BrainrotModule.BrainrotRarities and BrainrotModule.BrainrotRarities[name] == targetRarity then
                 count += 1
             end
         end
@@ -439,83 +293,119 @@ local function countCollectedRarity(targetRarity)
     return count
 end
 
-local function getActiveDiceBuffs()
-    local data = getData()
-    if not data or not data.DiceBuffs then return "geen" end
-    local parts = {}
-    for diceType, buffData in pairs(data.DiceBuffs) do
-        if type(buffData) == "table" and type(buffData.rollsRemaining) == "number" and buffData.rollsRemaining > 0 then
-            table.insert(parts, diceType .. " x" .. buffData.rollsRemaining)
-        end
+local function isDice777EventActive()
+    if not ClientGlobals or not ClientGlobals.ActiveEvents or not ClientGlobals.ActiveEvents.Data then return false end
+    local now = workspace:GetServerTimeNow()
+    local endTime = ClientGlobals.ActiveEvents.Data["Dice777Event"]
+    if type(endTime) == "number" and endTime > now then
+        return true
     end
-    return #parts > 0 and table.concat(parts, "  ") or "geen"
+    return false
 end
 
-local function getActiveEvents()
-    local parts = {}
-    local activeData = ClientGlobals.ActiveEvents and ClientGlobals.ActiveEvents.Data
-    if activeData then
-        local short = { RollFrenzyEvent = "RollFrenzy", Dice777Event = "777", Jackpot = "Jackpot" }
-        for eventName, endTime in pairs(activeData) do
-            if type(endTime) == "number" then
-                local t = math.floor(endTime - workspace:GetServerTimeNow())
-                if t > 0 then
-                    table.insert(parts, (short[eventName] or eventName) .. " " .. string.format("%d:%02d", math.floor(t/60), t%60))
-                end
+local globalMegaCount = 0
+
+local function updateInventoryAndUpgrades()
+    local data = getData()
+    local counts = {Normal = 0, Fire = 0, Gold = 0, Rainbow = 0, MegaRainbow = 0}
+    
+    if data and data.Inventory then
+        for _, item in pairs(data.Inventory) do
+            if item.sub and item.sub.diceType and counts[item.sub.diceType] ~= nil then
+                local amt = type(item.sub.amount) == "number" and item.sub.amount or 1
+                counts[item.sub.diceType] = counts[item.sub.diceType] + amt
             end
         end
     end
-    return #parts > 0 and table.concat(parts, " | ") or "geen"
-end
 
-local function formatTime(s)
-    return string.format("%02d:%02d:%02d", math.floor(s/3600), math.floor((s%3600)/60), math.floor(s%60))
+    globalMegaCount = counts.MegaRainbow
+
+    normalLbl.Text  = "Normal: "  .. counts.Normal
+    fireLbl.Text    = "Fire: "    .. counts.Fire
+    goldLbl.Text    = "Gold: "    .. counts.Gold
+    rainbowLbl.Text = "Rainbow: " .. counts.Rainbow
+    megaLbl.Text    = "MegaRainbow: " .. counts.MegaRainbow
+    megaLbl.TextColor3 = counts.MegaRainbow > 0 and Color3.fromRGB(255,100,255) or Color3.fromRGB(80,80,80)
+
+    -- Upgrades
+    if data and data.RNGUpgrades and RNGConfig and RNGConfig.Upgrades then
+        local UPGRADES = {"RollSpeed","Luck","InfinityLuck","EternalLuck","TraitLuck"}
+        local notDone = {}
+        for _, name in ipairs(UPGRADES) do
+            local lvl = data.RNGUpgrades[name] or 0
+            local cfg = RNGConfig.Upgrades[name]
+            if cfg and lvl < cfg.MaxLevel then table.insert(notDone, name) end
+        end
+        if #notDone == 0 then
+            upgradeLbl.Text = "UPGRADES: ✅ ALL MAX"
+            upgradeLbl.TextColor3 = Color3.fromRGB(80, 255, 80)
+        else
+            upgradeLbl.Text = "🔄 " .. table.concat(notDone, ", ")
+            upgradeLbl.TextColor3 = Color3.fromRGB(255, 195, 60)
+        end
+    end
 end
 
 -- ==========================================
--- LIVE UPDATE LOOP (elke seconde)
+-- REAL-TIME EXECUTION & LOOP
 -- ==========================================
 local startTime = tick()
-local UPGRADES  = {"RollSpeed","Luck","InfinityLuck","EternalLuck","TraitLuck"}
 
 task.spawn(function()
     while gui and gui.Parent do
-        timeLbl.Text  = "⏱ " .. formatTime(tick() - startTime)
-        local rolls   = _G.MzDRolls or 0
-        rollsLbl.Text = "🎲 Rolls: " .. rolls
-        buffLbl.Text  = getActiveDiceBuffs()
-
-        normalLbl.Text  = "Normal: "  .. getDiceCount("Normal")
-        fireLbl.Text    = "Fire: "    .. getDiceCount("Fire")
-        goldLbl.Text    = "Gold: "    .. getDiceCount("Gold")
-        rainbowLbl.Text = "Rainbow: " .. getDiceCount("Rainbow")
-        local mc        = getDiceCount("MegaRainbow")
-        megaLbl.Text       = "MegaRainbow: " .. mc
-        megaLbl.TextColor3 = mc > 0 and Color3.fromRGB(255,100,255) or Color3.fromRGB(80,80,80)
-
-        infLbl.Text  = "♾ Infinity: " .. countCollectedRarity("Infinity")
-        etLbl.Text   = "✨ Eternal: "  .. countCollectedRarity("Eternal")
-        usedLbl.Text = "🎯 Mega gebruikt: " .. math.floor(rolls / 5)
-
-        local allMax = true
-        local notDone = {}
-        for _, name in ipairs(UPGRADES) do
-            if not isUpgradeMaxed(name) then
-                allMax = false
-                table.insert(notDone, name)
+        pcall(function()
+            timeLbl.Text  = "⏱ " .. string.format("%02d:%02d:%02d", math.floor((tick()-startTime)/3600), math.floor(((tick()-startTime)%3600)/60), math.floor((tick()-startTime)%60))
+            rollsLbl.Text = "🎲 Rolls: " .. getAbsoluteRolls()
+            
+            local data = getData()
+            if data and data.DiceBuffs then
+                local parts = {}
+                for diceType, buffData in pairs(data.DiceBuffs) do
+                    if type(buffData) == "table" and (buffData.rollsRemaining or 0) > 0 then
+                        table.insert(parts, diceType .. " x" .. buffData.rollsRemaining)
+                    end
+                end
+                buffLbl.Text = #parts > 0 and table.concat(parts, "  ") or "geen"
+            else
+                buffLbl.Text = "geen"
             end
-        end
-        if allMax then
-            upgradeLbl.Text       = "UPGRADES: ✅ ALL MAX"
-            upgradeLbl.TextColor3 = Color3.fromRGB(80, 255, 80)
-        else
-            upgradeLbl.Text       = "🔄 " .. table.concat(notDone, ", ")
-            upgradeLbl.TextColor3 = Color3.fromRGB(255, 195, 60)
-        end
 
-        eventLbl.Text = getActiveEvents()
+            if ClientGlobals and ClientGlobals.ActiveEvents and ClientGlobals.ActiveEvents.Data then
+                local parts = {}
+                for eventName, endTime in pairs(ClientGlobals.ActiveEvents.Data) do
+                    if type(endTime) == "number" then
+                        local t = math.floor(endTime - workspace:GetServerTimeNow())
+                        if t > 0 then
+                            local cleanName = eventName:gsub("Event", "")
+                            table.insert(parts, cleanName .. " (" .. string.format("%d:%02d", math.floor(t/60), t%60) .. ")")
+                        end
+                    end
+                end
+                eventLbl.Text = #parts > 0 and table.concat(parts, " | ") or "geen"
+            else
+                eventLbl.Text = "geen"
+            end
+
+            updateInventoryAndUpgrades()
+            infLbl.Text  = "♾ Infinity: " .. countCollectedRarity("Infinity")
+            etLbl.Text   = "✨ Eternal: "  .. countCollectedRarity("Eternal")
+
+            -- EVALUATIE EVENT-DRIVEN BUFF STRATEGIE
+            local is777 = isDice777EventActive()
+            
+            if is777 then
+                usedLbl.Text = "🎯 STATUS: 🔥 Dice777 Actief! MegaRainbow inzetten!"
+                usedLbl.TextColor3 = Color3.fromRGB(80, 255, 80)
+            elseif globalMegaCount >= 15 then
+                usedLbl.Text = "🎯 STATUS: ⚠️ Tas vol (" .. globalMegaCount .. "/15 Mega)! Dumpen activeert."
+                usedLbl.TextColor3 = Color3.fromRGB(255, 140, 0)
+            else
+                usedLbl.Text = "🎯 STATUS: 💤 Standby. Wachten op Dice777Event..."
+                usedLbl.TextColor3 = Color3.fromRGB(140, 200, 255)
+            end
+        end)
         task.wait(1)
     end
 end)
 
-print("✅ MzD All-In-One actief!")
+print("✅ MzD Hardcore All-In-One v4: Volledig operationeel!")
