@@ -1,6 +1,6 @@
 -- =========================================================================
--- MzD ETFB RNG Farm — THE ULTIMATE FULL COMPREHENSIVE EDITION
--- Volledige Map Stripping + Zwart Scherm + Fixed Live Roll Counter
+-- MzD ETFB RNG Farm — THE ULTIMATE MASTER EDITION
+-- Volledige Map Stripping + Live Rolls + Coin Tracker + Auto Unequip
 -- =========================================================================
 local Players           = game:GetService("Players")
 local Lighting          = game:GetService("Lighting")
@@ -14,14 +14,24 @@ local previousNumbers = {}
 local ClientGlobals, RNGConfig, BrainrotModule
 
 -- =========================================================================
--- CHARACTER INITIALISATIE
+-- CHARACTER INITIALISATIE & AUTO UNEQUIP TRIGGERS
 -- =========================================================================
 local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local root = char:WaitForChild("HumanoidRootPart")
 
+pcall(function()
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if hum then hum:UnequipTools() end
+end)
+
 LocalPlayer.CharacterAdded:Connect(function(newChar)
     char = newChar
     root = newChar:WaitForChild("HumanoidRootPart")
+    task.wait(0.1)
+    pcall(function()
+        local hum = newChar:FindFirstChildOfClass("Humanoid")
+        if hum then hum:UnequipTools() end
+    end)
 end)
 
 -- =========================================================================
@@ -74,7 +84,7 @@ RNGConfig      = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("
 BrainrotModule = require(ReplicatedStorage.SharedModules.BrainrotModule)
 
 -- =========================================================================
--- DYNAMIC DELTA SCANNER (Jouw werkende live-tracker engine)
+-- DYNAMIC DELTA SCANNER (Live Roll Tracker)
 -- =========================================================================
 local function scanDataTable()
     local data = ClientGlobals.PlayerData and ClientGlobals.PlayerData.Data
@@ -132,14 +142,12 @@ pcall(function()
 end)
 
 -- =========================================================================
--- MAP & PLOT CLEANER (Verwijrederd alle onnodige objecten en lag)
+-- MAP & PLOT CLEANER (Anti-Lag)
 -- =========================================================================
 local PROTECTED = {"Craft", "Station", "Portal", "Upgrade", "Shop", "Spawn", "Base"}
 local function isProtected(obj)
     local name = obj.Name:lower()
-    for _, word in ipairs(PROTECTED) do
-        if name:find(word:lower()) then return true end
-    end
+    for _, word in ipairs(PROTECTED) do if name:find(word:lower()) then return true end end
     return false
 end
 
@@ -152,96 +160,58 @@ if BasesFolder and root then
         local ref = plot:FindFirstChildWhichIsA("BasePart", true)
         if ref then
             local dist = (ref.Position - root.Position).Magnitude
-            if dist < minDist then
-                minDist = dist
-                myPlot = plot
-            end
+            if dist < minDist then minDist = dist; myPlot = plot end
         end
     end
 end
 
--- Eigen plot opschonen (alleen functionele dingen overhouden)
 if myPlot then
     for _, obj in ipairs(myPlot:GetDescendants()) do
         pcall(function()
-            if isProtected(obj) then
-                if obj:IsA("BasePart") then obj.CastShadow = false end
-            elseif obj:IsA("Decal") or obj:IsA("Texture") or obj:IsA("SpecialMesh") or obj:IsA("ParticleEmitter") or obj:IsA("Beam") then
-                obj:Destroy()
-            elseif obj:IsA("BasePart") then
-                obj.CastShadow = false
-                obj.Material = Enum.Material.SmoothPlastic
+            if not isProtected(obj) then
+                if obj:IsA("BasePart") then obj.CastShadow = false; obj.Material = Enum.Material.SmoothPlastic
+                elseif obj:IsA("Decal") or obj:IsA("Texture") or obj:IsA("ParticleEmitter") or obj:IsA("Beam") then obj:Destroy() end
             end
         end)
     end
 end
 
--- Andere plots onzichtbaar maken
 if BasesFolder then
     for _, plot in ipairs(BasesFolder:GetChildren()) do
         if plot ~= myPlot then
             for _, obj in ipairs(plot:GetDescendants()) do
                 pcall(function()
-                    if obj:IsA("BasePart") then
-                        obj.Transparency = 1
-                        obj.CanCollide = false
-                        obj.CastShadow = false
-                    elseif obj:IsA("Decal") or obj:IsA("Texture") or obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("Light") then
-                        obj:Destroy()
-                    elseif obj:IsA("Sound") then
-                        obj.Volume = 0
-                    end
+                    if obj:IsA("BasePart") then obj.Transparency = 1; obj.CanCollide = false; obj.CastShadow = false
+                    elseif obj:IsA("Decal") or obj:IsA("Texture") or obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("Light") then obj:Destroy()
+                    elseif obj:IsA("Sound") then obj.Volume = 0 end
                 end)
             end
         end
     end
 end
 
--- Algemene Workspace rommel vernietigen
 for _, obj in ipairs(workspace:GetChildren()) do
-    if obj == char or obj == BasesFolder or obj:IsA("Terrain") or obj:IsA("Camera") then continue end
-    if isProtected(obj) then continue end
+    if obj == char or obj == BasesFolder or obj:IsA("Terrain") or obj:IsA("Camera") or isProtected(obj) then continue end
     pcall(function()
-        if obj:IsA("BasePart") and (obj.Size.X > 100 or obj.Size.Z > 100) then
-            obj.Transparency = 1
-            obj.CastShadow = false
-        elseif obj:IsA("Folder") or obj:IsA("Model") or obj:IsA("BasePart") then
-            obj:Destroy()
-        end
+        if obj:IsA("BasePart") and (obj.Size.X > 100 or obj.Size.Z > 100) then obj.Transparency = 1; obj.CastShadow = false
+        elseif obj:IsA("Folder") or obj:IsA("Model") or obj:IsA("BasePart") then obj:Destroy() end
     end)
 end
-
--- Anti-lag voor binnenkomende objecten/spelers
-local function stopAnims(character)
-    for _, obj in ipairs(character:GetDescendants()) do
-        pcall(function()
-            if obj:IsA("Animator") then
-                for _, track in ipairs(obj:GetPlayingAnimationTracks()) do track:Stop() end
-            end
-        end)
-    end
-end
-
-for _, player in ipairs(Players:GetPlayers()) do
-    if player ~= LocalPlayer and player.Character then stopAnims(player.Character) end
-end
-
-Players.PlayerAdded:Connect(function(p)
-    p.CharacterAdded:Connect(function(c)
-        task.wait(1)
-        stopAnims(c)
-    end)
-end)
-
-workspace.ChildAdded:Connect(function(obj)
-    if obj == char or obj == BasesFolder or obj:IsA("Terrain") or obj:IsA("Camera") or isProtected(obj) then return end
-    task.defer(function()
-        pcall(function() obj:Destroy() end)
-    end)
-end)
 
 -- =========================================================================
--- HUD LAYOUT GENERATOR (Exact volgens jouw screenshots)
+-- NUMBER FORMATTER
+-- =========================================================================
+local function formatNumber(n)
+    n = tonumber(n)
+    if not n then return "0" end
+    if n >= 1e9 then return string.format("%.2f B", n / 1e9) end
+    if n >= 1e6 then return string.format("%.2f M", n / 1e6) end
+    if n >= 1e3 then return string.format("%.1f K", n / 1e3) end
+    return tostring(math.floor(n))
+end
+
+-- =========================================================================
+-- HUD LAYOUT GENERATOR
 -- =========================================================================
 local main = Instance.new("Frame")
 main.Size = UDim2.new(0.96, 0, 0.96, 0)
@@ -283,7 +253,6 @@ local function makeRow2(tL, cL, tR, cR, yScale)
     f.BackgroundTransparency = 1
     f.LayoutOrder = _idx
     f.Parent = main
-    
     local lL = Instance.new("TextLabel")
     lL.Size = UDim2.new(0.5, 0, 1, 0)
     lL.BackgroundTransparency = 1
@@ -292,7 +261,6 @@ local function makeRow2(tL, cL, tR, cR, yScale)
     lL.TextScaled = true
     lL.Font = Enum.Font.GothamBold
     lL.Parent = f
-    
     local lR = Instance.new("TextLabel")
     lR.Size = UDim2.new(0.5, 0, 1, 0)
     lR.Position = UDim2.new(0.5, 0, 0, 0)
@@ -315,10 +283,8 @@ local function makeDivider()
     f.Parent = main
 end
 
--- Bouw de schone HUD op
 makeRow("MzD ETFB RNG Farm", Color3.fromRGB(255, 215, 0), 0.10)
 makeDivider()
--- LIVE COUNTER IS NU GEKOPPELD AAN DE RECHTERKANT
 local timeLbl, rollsLbl = makeRow2("⏱ 00:00:00", Color3.fromRGB(140, 200, 255), "🎲 Rolls: 0", Color3.fromRGB(140, 200, 255), 0.075)
 makeDivider()
 makeRow("─ DICE BUFFS ─", Color3.fromRGB(90, 90, 90), 0.05)
@@ -330,7 +296,7 @@ local goldLbl, rainbowLbl = makeRow2("Gold: 0", Color3.fromRGB(255,215,0), "Rain
 local megaLbl = makeRow("MegaRainbow: 0", Color3.fromRGB(80,80,80), 0.075)
 makeDivider()
 local infLbl, etLbl = makeRow2("♾ Infinity: 0", Color3.fromRGB(255, 80, 80), "✨ Eternal: 0", Color3.fromRGB(255, 215, 0), 0.07)
-local usedLbl = makeRow("🎯 Mega gebruikt: 0", Color3.fromRGB(200, 150, 255), 0.065)
+local coinsLbl = makeRow("💰 Coins: 0", Color3.fromRGB(100, 255, 100), 0.075)
 makeDivider()
 local upgradeLbl = makeRow("UPGRADES: controleren...", Color3.fromRGB(220,220,220), 0.065)
 makeDivider()
@@ -338,10 +304,10 @@ makeRow("─ EVENTS ─", Color3.fromRGB(90, 90, 90), 0.05)
 local eventLbl = makeRow("geen", Color3.fromRGB(150, 255, 150), 0.065)
 
 -- =========================================================================
--- DATA VERWERKING & FILTERS
+-- DATA HELPERS
 -- =========================================================================
 local function getData() return ClientGlobals.PlayerData and ClientGlobals.PlayerData.Data end
-
+local function getGameCoins() local data = getData() return data and (data.Coins or data.Cash or data.Money or data.RNGCoins or data.Gems) or 0 end
 local function getDiceCount(diceType)
     local data = getData()
     if not data or not data.Inventory then return 0 end
@@ -353,10 +319,8 @@ local function getDiceCount(diceType)
     end
     return count
 end
-
 local function getUpgradeLevel(name) local data = getData() return (data and data.RNGUpgrades and data.RNGUpgrades[name]) or 0 end
 local function isUpgradeMaxed(name) local cfg = RNGConfig.Upgrades[name] return cfg and getUpgradeLevel(name) >= cfg.MaxLevel end
-
 local function countCollectedRarity(targetRarity)
     local data = getData()
     if not data or not data.CollectedBrainrots then return 0 end
@@ -368,7 +332,6 @@ local function countCollectedRarity(targetRarity)
     end
     return count
 end
-
 local function getActiveDiceBuffs()
     local data = getData()
     if not data or not data.DiceBuffs then return "geen" end
@@ -380,7 +343,6 @@ local function getActiveDiceBuffs()
     end
     return #parts > 0 and table.concat(parts, " ") or "geen"
 end
-
 local function getActiveEvents()
     local parts = {}
     local activeData = ClientGlobals.ActiveEvents and ClientGlobals.ActiveEvents.Data
@@ -405,41 +367,37 @@ local UPGRADES = {"RollSpeed", "Luck", "InfinityLuck", "EternalLuck", "TraitLuck
 task.spawn(function()
     while gui and gui.Parent do
         pcall(function()
+            -- Auto-Unequip checker
+            if char then
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                if hum then hum:UnequipTools() end
+            end
+
             -- Update Timer
             local elapsed = tick() - startTime
             timeLbl.Text = "⏱ " .. string.format("%02d:%02d:%02d", math.floor(elapsed/3600), math.floor((elapsed%3600)/60), math.floor(elapsed%60))
             
-            -- LIVE ROLLS (Gekoppeld aan de werkende Delta-scans)
+            -- UI Updates
             rollsLbl.Text = "🎲 Rolls: " .. _G.MzDSessionRolls
+            coinsLbl.Text = "💰 Coins: " .. formatNumber(getGameCoins())
             
-            -- Inventory & Stats updates
             normalLbl.Text = "Normal: " .. getDiceCount("Normal")
             fireLbl.Text = "Fire: " .. getDiceCount("Fire")
             goldLbl.Text = "Gold: " .. getDiceCount("Gold")
             rainbowLbl.Text = "Rainbow: " .. getDiceCount("Rainbow")
-            
             local mc = getDiceCount("MegaRainbow")
             megaLbl.Text = "MegaRainbow: " .. mc
             megaLbl.TextColor3 = mc > 0 and Color3.fromRGB(255,100,255) or Color3.fromRGB(80,80,80)
             
             infLbl.Text = "♾ Infinity: " .. countCollectedRarity("Infinity")
             etLbl.Text = "✨ Eternal: " .. countCollectedRarity("Eternal")
-            usedLbl.Text = "🎯 Mega gebruikt: " .. math.floor(_G.MzDSessionRolls / 5)
             
-            -- Upgrades Status
-            local allMax = true
-            local notDone = {}
+            local allMax = true; local notDone = {}
             for _, name in ipairs(UPGRADES) do
                 if not isUpgradeMaxed(name) then allMax = false; table.insert(notDone, name) end
             end
-            
-            if allMax then 
-                upgradeLbl.Text = "UPGRADES: ✅ ALL MAX"
-                upgradeLbl.TextColor3 = Color3.fromRGB(80, 255, 80)
-            else 
-                upgradeLbl.Text = "🔄 " .. table.concat(notDone, ", ")
-                upgradeLbl.TextColor3 = Color3.fromRGB(255, 195, 60) 
-            end
+            upgradeLbl.Text = allMax and "UPGRADES: ✅ ALL MAX" or "🔄 " .. table.concat(notDone, ", ")
+            upgradeLbl.TextColor3 = allMax and Color3.fromRGB(80, 255, 80) or Color3.fromRGB(255, 195, 60) 
             
             buffLbl.Text = getActiveDiceBuffs()
             eventLbl.Text = getActiveEvents()
