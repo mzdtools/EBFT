@@ -1,13 +1,10 @@
--- ==========================================
--- TOTAL HARDCORE PERFORMANCE & CLEANER SCRIPT
--- ==========================================
 local Players = game:GetService("Players")
 local Lighting = game:GetService("Lighting")
 local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
 local BasesFolder = workspace:FindFirstChild("Bases")
 
--- Character tracking om crashes/resets te voorkomen
+-- Character tracking tegen respawn-crashes
 local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local root = char:WaitForChild("HumanoidRootPart")
 
@@ -16,7 +13,7 @@ LocalPlayer.CharacterAdded:Connect(function(newChar)
     root = newChar:WaitForChild("HumanoidRootPart")
 end)
 
--- Veilig wachten tot de game en jouw plot goed zijn ingeladen
+-- Wachttijd voor trage clients / auto-execute
 local LOAD_WAIT = 4
 print("⏳ Wachten op laden... (" .. LOAD_WAIT .. "s)")
 task.wait(LOAD_WAIT)
@@ -26,7 +23,7 @@ char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 root = char:WaitForChild("HumanoidRootPart")
 
 -- ==========================================
--- 1. JOUW PLOT DETECTEREN
+-- Plot vinden op basis van afstand
 -- ==========================================
 local myPlot = nil
 if BasesFolder and root then
@@ -43,9 +40,8 @@ if BasesFolder and root then
     end
 end
 
-print(myPlot and "✅ Jouw plot gedetecteerd: " .. myPlot.Name or "⚠️ Geen eigen plot gevonden!")
+print(myPlot and "✅ Plot gevonden: " .. myPlot.Name or "⚠️ Geen plot gevonden!")
 
--- Filters voor belangrijke game-objecten
 local PROTECTED_KEYWORDS = {"Craft", "Station", "Portal", "Upgrade", "Shop", "Spawn", "Base"}
 local function isProtected(obj)
     local name = obj.Name:lower()
@@ -56,75 +52,52 @@ local function isProtected(obj)
 end
 
 -- ==========================================
--- 2. LIGHTING & RENDERING COMPRESSIE
--- ==========================================
-pcall(function()
-    Lighting.Technology = Enum.Technology.Compatibility
-    Lighting.GlobalShadows = false
-    Lighting.Brightness = 2
-    Lighting.ClockTime = 14
-    Lighting.FogEnd = 150         -- Alles buiten 150 studs stopt met renderen
-    Lighting.FogStart = 100
-    Lighting.FogColor = Color3.fromRGB(0, 0, 0)
-end)
-
-for _, e in ipairs(Lighting:GetChildren()) do
-    pcall(function()
-        if e:IsA("PostEffect") then e.Enabled = false end
-    end)
-end
-
-pcall(function()
-    Workspace.Terrain.WaterWaveSize = 0
-    Workspace.Terrain.WaterWaveSpeed = 0
-    Workspace.Terrain.Decoration = false
-end)
-
--- ==========================================
--- 3. HET SLIMME SCHOONMAAKWERK (Clean & Strip)
+-- Slimme Schoonmaak Logica (Geen isFloor-check meer!)
 -- ==========================================
 local function cleanObject(obj, isOwnPlot)
     pcall(function()
-        -- Verwijder 2D lag (Plaatjes, tekst, GUI's)
+        -- 1. Verwijder ALTIJD alle decals, textures en teksten (op jouw base én andere)
         if obj:IsA("Decal") or obj:IsA("Texture") or obj:IsA("SurfaceGui") or obj:IsA("BillboardGui") then
             obj:Destroy()
-        
-        -- Verwijder zware 3D Models en effecten (Brainrot meshes, deeltjes)
-        elseif obj:IsA("SpecialMesh") or obj:IsA("CharacterMesh") or obj:IsA("Accessory") 
-            or obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("Fire") 
-            or obj:IsA("Smoke") or obj:IsA("Sparkles") then
+            
+        -- 2. Verwijder alle 3D meshes en brainrot modellen
+        elseif obj:IsA("SpecialMesh") or obj:IsA("CharacterMesh") or obj:IsA("Accessory") then
             obj:Destroy()
             
-        -- MeshParts onzichtbaar maken om fouten te voorkomen
+        -- 3. MeshParts onzichtbaar maken om errors te voorkomen
         elseif obj:IsA("MeshPart") then
             obj.Transparency = 1
             obj.CanCollide = false
             obj.CastShadow = false
             
-        -- Neppe NPC's/Beelden slopen, echte spelers met rust laten
+        -- 4. Verwijder neppe NPC's/Beelden, laat echte spelers met rust
         elseif obj:IsA("Humanoid") then
             local parentModel = obj.Parent
             if parentModel and parentModel:IsA("Model") and not Players:GetPlayerFromCharacter(parentModel) then
                 parentModel:Destroy()
             end
             
-        -- Geluiden dempen
+        -- 5. Verwijder alle laggy effecten
+        elseif obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("Fire") or obj:IsA("Smoke") or obj:IsA("Sparkles") then
+            obj:Destroy()
+            
+        -- 6. Geluiden dempen
         elseif obj:IsA("Sound") then
             obj.Volume = 0
 
-        -- VLOER EN BLOKKEN OPTIMALISEREN (Dit beschermt jouw kleine blokjes)
+        -- 7. Onderdelen / Blokken optimaliseren
         elseif obj:IsA("BasePart") then
             obj.CastShadow = false
-            obj.Material = Enum.Material.SmoothPlastic -- Forceer kaal plastic (0% GPU lag)
+            obj.Material = Enum.Material.SmoothPlastic -- Forceer plastic voor FPS
             
             if not isOwnPlot then
-                -- Als het andermans base is, mag alles onzichtbaar en collision uit
+                -- Andermans base wordt volledig onzichtbaar en collision-loos
                 obj.Transparency = 1
                 obj.CanCollide = false
                 obj.CanTouch = false
                 obj.CanQuery = false
             else
-                -- Dit is JOUW base: als een muur extreem hoog/groot is, verberg hem. Vloer blijft staan.
+                -- JOUW base: we slopen GEEN onderdelen. Alleen muren hoger dan 15 studs worden verborgen.
                 if obj.Size.Y > 15 and not isProtected(obj) then
                     obj.Transparency = 1
                     obj.CanCollide = false
@@ -134,17 +107,19 @@ local function cleanObject(obj, isOwnPlot)
     end)
 end
 
--- Bestaande mappen opschonen
+-- ==========================================
+-- Bestaande en nieuwe base-troep live cleanen
+-- ==========================================
 if BasesFolder then
     for _, plot in ipairs(BasesFolder:GetChildren()) do
         local isOwnPlot = (plot == myPlot)
         
-        -- Maak direct schoon
+        -- Direct cleanen bij het laden
         for _, obj in ipairs(plot:GetDescendants()) do
             cleanObject(obj, isOwnPlot)
         end
         
-        -- Blijf live binnenkomende objecten in de bases scannen en cleanen
+        -- Live bijhouden als er nieuwe troep wordt gebouwd/gespawnd
         plot.DescendantAdded:Connect(function(desc)
             cleanObject(desc, isOwnPlot)
         end)
@@ -152,14 +127,14 @@ if BasesFolder then
 end
 
 -- ==========================================
--- 4. WORKSPACE & LOBBY VEILIG OPTIMALISEREN
+-- Workspace & Lobby leegvegen buiten de bases
 -- ==========================================
 for _, obj in ipairs(Workspace:GetChildren()) do
     if obj == char or obj == BasesFolder or obj:IsA("Terrain") or obj:IsA("Camera") or isProtected(obj) then continue end
     
     pcall(function()
-        -- Grote map-funderingen/Baseplates NIET slopen om vallen te voorkomen, wel onzichtbaar maken
         if obj:IsA("BasePart") then
+            -- Grote baseplates alleen onzichtbaar maken zodat je niet valt
             obj.Transparency = 1
             obj.CastShadow = false
             obj.Material = Enum.Material.SmoothPlastic
@@ -171,8 +146,31 @@ for _, obj in ipairs(Workspace:GetChildren()) do
 end
 
 -- ==========================================
--- 5. ANIMATIES STOPPEN & LIVE WORKSPACE FILTER
+-- Lighting & Performance Tweaks
 -- ==========================================
+pcall(function()
+    Lighting.Technology = Enum.Technology.Compatibility
+    Lighting.GlobalShadows = false
+    Lighting.Brightness = 2
+    Lighting.ClockTime = 14
+    Lighting.FogEnd = 150 -- Verre objecten stoppen met renderen
+    Lighting.FogStart = 100
+    Lighting.FogColor = Color3.fromRGB(0, 0, 0)
+    Lighting.OutdoorAmbient = Color3.fromRGB(100, 100, 100)
+    Lighting.Ambient = Color3.fromRGB(80, 80, 80)
+end)
+
+for _, e in ipairs(Lighting:GetChildren()) do
+    pcall(function() if e:IsA("PostEffect") then e.Enabled = false end end)
+end
+
+pcall(function()
+    Workspace.Terrain.WaterWaveSize = 0
+    Workspace.Terrain.WaterWaveSpeed = 0
+    Workspace.Terrain.Decoration = false
+end)
+
+-- Animaties van anderen stoppen
 local function stopAnimations(character)
     for _, obj in ipairs(character:GetDescendants()) do
         if obj:IsA("Animator") then
@@ -181,12 +179,10 @@ local function stopAnimations(character)
     end
 end
 
--- Stop animaties van spelers die al binnen zijn
 for _, player in ipairs(Players:GetPlayers()) do
     if player ~= LocalPlayer and player.Character then stopAnimations(player.Character) end
 end
 
--- Stop animaties van nieuwe spelers
 Players.PlayerAdded:Connect(function(player)
     player.CharacterAdded:Connect(function(otherChar)
         task.wait(1)
@@ -194,17 +190,17 @@ Players.PlayerAdded:Connect(function(player)
     end)
 end)
 
--- Live workspace tracker (Houdt nieuwe drops/spawns schoon zonder de map te breken)
+-- Live Workspace Tracker
 Workspace.ChildAdded:Connect(function(obj)
     if obj == char or obj == BasesFolder or obj:IsA("Terrain") or obj:IsA("Camera") or isProtected(obj) then return end
     task.defer(function()
         pcall(function() 
             if obj:IsA("BasePart") then
                 if obj.Size.X > 200 or obj.Size.Z > 200 then
-                    obj.Transparency = 1 -- Grote spawns/vloeren alleen onzichtbaar maken
+                    obj.Transparency = 1
                     obj.Material = Enum.Material.SmoothPlastic
                 else
-                    obj:Destroy() -- Kleine losse troep direct vernietigen
+                    obj:Destroy()
                 end
             else
                 for _, desc in ipairs(obj:GetDescendants()) do cleanObject(desc, false) end
@@ -213,4 +209,4 @@ Workspace.ChildAdded:Connect(function(obj)
     end)
 end)
 
-print("🚀 TOTAL BOOSTER GEACTIVEERD: Geen brainrot, geen decals, stabiele vloer en maximale FPS!")
+print("🚀 TOTAALSCRIPT ACTIEF: Decals & Brainrot weg op álle bases, vloer staat als een huis!")
