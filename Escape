@@ -1,327 +1,80 @@
--- ==========================================
--- MzD ETFB RNG Farm — ALL IN ONE
--- Optimalisatie + HUD + Zwart scherm + Roll Counter
--- ==========================================
+-- =========================================================================
+-- MzD ETFB RNG Farm — ULTIMATE VERSION (Observe Method)
+-- =========================================================================
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players           = game:GetService("Players")
 local Lighting          = game:GetService("Lighting")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService        = game:GetService("RunService")
 local LocalPlayer       = Players.LocalPlayer
 
--- Modules (laden zodra game klaar is)
-local ClientGlobals, RNGConfig, BrainrotModule
+-- Services & Modules laden (volgens jouw gedeelde snippets)
+local ClientGlobals = require(ReplicatedStorage.Client.Modules.ClientGlobals)
+local RNGConfig     = require(ReplicatedStorage.Shared.Config.RNGUpgrades)
+local BrainrotModule = require(ReplicatedStorage.SharedModules.BrainrotModule)
 
--- Globale roll counter (gedeeld met MasterScript)
 _G.MzDRolls = _G.MzDRolls or 0
 
--- ==========================================
--- FIX: CharacterAdded BOVENAAN
--- ==========================================
-local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-local root = char:WaitForChild("HumanoidRootPart")
+-- =========================================================================
+-- ROLL COUNTER (GEBRUIKT OBSERVE PATROON)
+-- =========================================================================
+local function setupRollObserver()
+    local potentialKeys = {"Rolls", "TotalRolls", "Stats"}
+    
+    for _, key in ipairs(potentialKeys) do
+        task.spawn(function()
+            pcall(function()
+                ClientGlobals.PlayerData:Observe({key}, function(val)
+                    if type(val) == "number" then
+                        _G.MzDRolls = val
+                    elseif type(val) == "table" and val.Rolls then
+                        _G.MzDRolls = val.Rolls
+                    end
+                end)
+            end)
+        end)
+    end
+end
+setupRollObserver()
 
-LocalPlayer.CharacterAdded:Connect(function(newChar)
-    char = newChar
-    root = newChar:WaitForChild("HumanoidRootPart")
-end)
-
--- ==========================================
--- CAMERA: Ondergronds → 3D rendering stopt
--- ==========================================
+-- =========================================================================
+-- CAMERA & OPTIMALISATIE
+-- =========================================================================
 local camera = workspace.CurrentCamera
 camera.CameraType = Enum.CameraType.Scriptable
 camera.CFrame = CFrame.new(0, -50000, 0)
 
 RunService.RenderStepped:Connect(function()
-    if camera.CameraType ~= Enum.CameraType.Scriptable then
-        camera.CameraType = Enum.CameraType.Scriptable
-    end
+    if camera.CameraType ~= Enum.CameraType.Scriptable then camera.CameraType = Enum.CameraType.Scriptable end
     camera.CFrame = CFrame.new(0, -50000, 0)
 end)
 
--- ==========================================
--- HUD: Opzetten VOOR de laadwachttijd
--- ==========================================
+-- =========================================================================
+-- HUD INITIALISATIE
+-- =========================================================================
 local gui = Instance.new("ScreenGui")
-gui.Name           = "MzDFarmHUD"
-gui.ResetOnSpawn   = false
+gui.Name = "MzDFarmHUD"
+gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
-gui.DisplayOrder   = 999
-gui.Parent         = LocalPlayer.PlayerGui
+gui.DisplayOrder = 999
+gui.Parent = LocalPlayer.PlayerGui
 
-local bg = Instance.new("Frame")
-bg.Size             = UDim2.new(1, 0, 1, 0)
-bg.BackgroundColor3 = Color3.new(0, 0, 0)
-bg.BorderSizePixel  = 0
-bg.Parent           = gui
-
-local loadLbl = Instance.new("TextLabel")
-loadLbl.Size               = UDim2.new(1, 0, 1, 0)
-loadLbl.BackgroundTransparency = 1
-loadLbl.Text               = "⏳ MzD Farm laden..."
-loadLbl.TextColor3         = Color3.fromRGB(255, 215, 0)
-loadLbl.TextScaled         = true
-loadLbl.Font               = Enum.Font.GothamBold
-loadLbl.Parent             = gui
-
--- ==========================================
--- WACHTTIJD (trage client / auto-execute)
--- ==========================================
-local LOAD_WAIT = 10
-print("⏳ Wachten op laden... (" .. LOAD_WAIT .. "s)")
-task.wait(LOAD_WAIT)
-loadLbl:Destroy()
-
--- ==========================================
--- MODULES LADEN
--- ==========================================
-ClientGlobals  = require(ReplicatedStorage.Client.Modules.ClientGlobals)
-RNGConfig      = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"):WaitForChild("RNGUpgrades"))
-BrainrotModule = require(ReplicatedStorage.SharedModules.BrainrotModule)
-
--- ==========================================
--- ROLL COUNTER TRACKER (DATA SYNC)
--- ==========================================
-task.spawn(function()
-    while gui and gui.Parent do
-        pcall(function()
-            local data = ClientGlobals.PlayerData and ClientGlobals.PlayerData.Data
-            if data and (data.TotalRolls or data.Rolls) then
-                _G.MzDRolls = data.TotalRolls or data.Rolls
-            end
-        end)
-        task.wait(0.5)
-    end
-end)
-
--- ==========================================
--- BASES & PLOT
--- ==========================================
-local BasesFolder = workspace:WaitForChild("Bases", 20)
-if not BasesFolder then warn("⚠️ Bases folder niet gevonden!") end
-
-char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-root = char:WaitForChild("HumanoidRootPart")
-
-local myPlot = nil
-if BasesFolder and root then
-    local minDist = math.huge
-    for _, plot in ipairs(BasesFolder:GetChildren()) do
-        local ref = plot:FindFirstChildWhichIsA("BasePart", true)
-        if ref then
-            local dist = (ref.Position - root.Position).Magnitude
-            if dist < minDist then
-                minDist = dist
-                myPlot = plot
-            end
-        end
-    end
-end
-
--- ==========================================
--- LIGHTING → ZWART
--- ==========================================
-pcall(function()
-    for _, obj in ipairs(Lighting:GetChildren()) do
-        if obj:IsA("Sky") then obj:Destroy() end
-        if obj:IsA("PostEffect") then obj.Enabled = false end
-    end
-    Lighting.Technology   = Enum.Technology.Compatibility
-    Lighting.GlobalShadows  = false
-    Lighting.Brightness     = 0
-    Lighting.OutdoorAmbient = Color3.new(0, 0, 0)
-    Lighting.Ambient        = Color3.new(0, 0, 0)
-    Lighting.FogEnd         = 1
-    Lighting.FogColor       = Color3.new(0, 0, 0)
-end)
-
--- ==========================================
--- TERRAIN
--- ==========================================
-pcall(function()
-    workspace.Terrain.WaterWaveSize    = 0
-    workspace.Terrain.WaterWaveSpeed   = 0
-    workspace.Terrain.WaterReflectance = 0
-    workspace.Terrain.WaterTransparency = 1
-    workspace.Terrain.Decoration       = false
-end)
-
--- ==========================================
--- PROTECTED KEYWORDS
--- ==========================================
-local PROTECTED = {"Craft","Station","Portal","Upgrade","Shop","Spawn","Base"}
-local function isProtected(obj)
-    local name = obj.Name:lower()
-    for _, word in ipairs(PROTECTED) do
-        if name:find(word:lower()) then return true end
-    end
-    return false
-end
-
--- ==========================================
--- EIGEN BASE STRIPPEN
--- ==========================================
-if myPlot then
-    for _, obj in ipairs(myPlot:GetDescendants()) do
-        pcall(function()
-            if isProtected(obj) then
-                if obj:IsA("BasePart") then obj.CastShadow = false end
-            elseif obj:IsA("Decal") or obj:IsA("Texture") or obj:IsA("SpecialMesh")
-                or obj:IsA("CharacterMesh") or obj:IsA("Accessory") then
-                obj:Destroy()
-            elseif obj:IsA("ParticleEmitter") or obj:IsA("Beam")
-                or obj:IsA("Fire") or obj:IsA("Smoke") or obj:IsA("Sparkles") then
-                obj:Destroy()
-            elseif obj:IsA("BasePart") then
-                obj.CastShadow = false
-                obj.Material   = Enum.Material.SmoothPlastic
-            end
-        end)
-    end
-end
-
--- ==========================================
--- ANDERE BASES STRIPPEN
--- ==========================================
-if BasesFolder then
-    for _, plot in ipairs(BasesFolder:GetChildren()) do
-        if plot ~= myPlot then
-            plot.DescendantAdded:Connect(function(desc)
-                pcall(function()
-                    if desc:IsA("BasePart") then
-                        desc.Transparency = 1
-                        desc.CanCollide   = false
-                        desc.CastShadow   = false
-                    elseif desc:IsA("Decal") or desc:IsA("Texture") then
-                        desc.Transparency = 1
-                    elseif desc:IsA("ParticleEmitter") or desc:IsA("Beam")
-                        or desc:IsA("Light") or desc:IsA("Trail")
-                        or desc:IsA("Fire") or desc:IsA("Smoke")
-                        or desc:IsA("Sparkles") then
-                        desc.Enabled = false
-                    end
-                end)
-            end)
-            for _, obj in ipairs(plot:GetDescendants()) do
-                pcall(function()
-                    if obj:IsA("BasePart") then
-                        obj.Transparency = 1
-                        obj.CanCollide   = false
-                        obj.CastShadow   = false
-                    elseif obj:IsA("Decal") or obj:IsA("Texture") then
-                        obj.Transparency = 1
-                    elseif obj:IsA("ParticleEmitter") or obj:IsA("Beam")
-                        or obj:IsA("Light") or obj:IsA("Trail")
-                        or obj:IsA("Fire") or obj:IsA("Smoke")
-                        or obj:IsA("Sparkles") then
-                        obj.Enabled = false
-                    elseif obj:IsA("Sound") then
-                        obj.Volume = 0
-                    end
-                end)
-            end
-        end
-    end
-end
-
--- ==========================================
--- WORKSPACE STRIPPEN
--- ==========================================
-for _, obj in ipairs(workspace:GetChildren()) do
-    if obj == char then continue end
-    if obj == BasesFolder then continue end
-    if obj:IsA("Terrain") then continue end
-    if obj:IsA("Camera") then continue end
-    if isProtected(obj) then continue end
-    pcall(function()
-        if obj:IsA("BasePart") and (obj.Size.X > 100 or obj.Size.Z > 100) then
-            obj.Transparency = 1
-            obj.CastShadow   = false
-        elseif obj:IsA("Folder") or obj:IsA("Model") or obj:IsA("BasePart") then
-            obj:Destroy()
-        end
-    end)
-end
-
--- ==========================================
--- ANIMATIES ANDERE SPELERS UIT
--- ==========================================
-for _, player in ipairs(Players:GetPlayers()) do
-    if player ~= LocalPlayer then
-        local otherChar = player.Character
-        if otherChar then
-            for _, obj in ipairs(otherChar:GetDescendants()) do
-                pcall(function()
-                    if obj:IsA("Animator") then
-                        for _, track in ipairs(obj:GetPlayingAnimationTracks()) do
-                            track:Stop()
-                        end
-                    end
-                end)
-            end
-        end
-    end
-end
-
-Players.PlayerAdded:Connect(function(player)
-    player.CharacterAdded:Connect(function(otherChar)
-        task.wait(1)
-        for _, obj in ipairs(otherChar:GetDescendants()) do
-            pcall(function()
-                if obj:IsA("Animator") then
-                    for _, track in ipairs(obj:GetPlayingAnimationTracks()) do
-                        track:Stop()
-                    end
-                end
-            end)
-        end
-    end)
-end)
-
--- ==========================================
--- LIVE STRIPPEN
--- ==========================================
-workspace.ChildAdded:Connect(function(obj)
-    if obj == char then return end
-    if obj == BasesFolder then return end
-    if obj:IsA("Terrain") then return end
-    if obj:IsA("Camera") then return end
-    if isProtected(obj) then return end
-    task.defer(function()
-        pcall(function()
-            if obj:IsA("BasePart") and (obj.Size.X > 100 or obj.Size.Z > 100) then
-                obj.Transparency = 1
-            else
-                obj:Destroy()
-            end
-        end)
-    end)
-end)
-
--- ==========================================
--- HUD OPBOUWEN
--- ==========================================
 local main = Instance.new("Frame")
-main.Size                   = UDim2.new(0.96, 0, 0.96, 0)
-main.Position               = UDim2.new(0.02, 0, 0.02, 0)
+main.Size = UDim2.new(0.96, 0, 0.96, 0)
+main.Position = UDim2.new(0.02, 0, 0.02, 0)
 main.BackgroundTransparency = 1
-main.ClipsDescendants       = true
-main.Parent                 = gui
+main.Parent = gui
 
 local listLayout = Instance.new("UIListLayout")
-listLayout.FillDirection       = Enum.FillDirection.Vertical
+listLayout.FillDirection = Enum.FillDirection.Vertical
 listLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-listLayout.SortOrder           = Enum.SortOrder.LayoutOrder
-listLayout.Padding             = UDim.new(0.004, 0)
-listLayout.Parent              = main
+listLayout.Padding = UDim.new(0.004, 0)
+listLayout.Parent = main
 
-local _idx = 0
+-- HUD Elementen aanmaken
 local function makeRow(text, color, yScale)
-    _idx += 1
     local f = Instance.new("Frame")
-    f.Size = UDim2.new(1, 0, yScale or 0.075, 0)
+    f.Size = UDim2.new(1, 0, yScale or 0.07, 0)
     f.BackgroundTransparency = 1
-    f.LayoutOrder = _idx
     f.Parent = main
     local lbl = Instance.new("TextLabel")
     lbl.Size = UDim2.new(1, 0, 1, 0)
@@ -330,76 +83,24 @@ local function makeRow(text, color, yScale)
     lbl.TextColor3 = color or Color3.new(1,1,1)
     lbl.TextScaled = true
     lbl.Font = Enum.Font.GothamBold
-    lbl.TextXAlignment = Enum.TextXAlignment.Center
     lbl.Parent = f
     return lbl
 end
 
-local function makeRow2(tL, cL, tR, cR, yScale)
-    _idx += 1
-    local f = Instance.new("Frame")
-    f.Size = UDim2.new(1, 0, yScale or 0.065, 0)
-    f.BackgroundTransparency = 1
-    f.LayoutOrder = _idx
-    f.Parent = main
-    local lL = Instance.new("TextLabel")
-    lL.Size = UDim2.new(0.5, 0, 1, 0)
-    lL.BackgroundTransparency = 1
-    lL.Text = tL
-    lL.TextColor3 = cL or Color3.new(1,1,1)
-    lL.TextScaled = true
-    lL.Font = Enum.Font.GothamBold
-    lL.TextXAlignment = Enum.TextXAlignment.Center
-    lL.Parent = f
-    local lR = Instance.new("TextLabel")
-    lR.Size = UDim2.new(0.5, 0, 1, 0)
-    lR.Position = UDim2.new(0.5, 0, 0, 0)
-    lR.BackgroundTransparency = 1
-    lR.Text = tR
-    lR.TextColor3 = cR or Color3.new(1,1,1)
-    lR.TextScaled = true
-    lR.Font = Enum.Font.GothamBold
-    lR.TextXAlignment = Enum.TextXAlignment.Center
-    lR.Parent = f
-    return lL, lR
-end
-
-local function makeDivider()
-    _idx += 1
-    local f = Instance.new("Frame")
-    f.Size = UDim2.new(0.92, 0, 0.004, 0)
-    f.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-    f.BorderSizePixel = 0
-    f.LayoutOrder = _idx
-    f.Parent = main
-end
-
-local function makeHeader(text) return makeRow(text, Color3.fromRGB(90, 90, 90), 0.05) end
-
+-- Header
 makeRow("MzD ETFB RNG Farm", Color3.fromRGB(255, 215, 0), 0.10)
-makeDivider()
-local timeLbl, rollsLbl = makeRow2("⏱ 00:00:00", Color3.fromRGB(140, 200, 255), "🎲 Rolls: 0", Color3.fromRGB(140, 200, 255), 0.07)
-makeDivider()
-makeHeader("─ DICE BUFFS ─")
-local buffLbl = makeRow("geen", Color3.fromRGB(255, 180, 80), 0.065)
-makeDivider()
-makeHeader("─ INVENTORY ─")
-local normalLbl, fireLbl = makeRow2("Normal: 0", Color3.fromRGB(210,210,210), "Fire: 0", Color3.fromRGB(255,140,0), 0.065)
-local goldLbl, rainbowLbl = makeRow2("Gold: 0", Color3.fromRGB(255,215,0), "Rainbow: 0", Color3.fromRGB(100,255,200), 0.065)
-local megaLbl = makeRow("MegaRainbow: 0", Color3.fromRGB(80,80,80), 0.075)
-makeDivider()
-local infLbl, etLbl = makeRow2("♾ Infinity: 0", Color3.fromRGB(255, 80, 80), "✨ Eternal: 0", Color3.fromRGB(255, 215, 0), 0.07)
-local usedLbl = makeRow("🎯 Mega gebruikt: 0", Color3.fromRGB(200, 150, 255), 0.065)
-makeDivider()
-local upgradeLbl = makeRow("UPGRADES: controleren...", Color3.fromRGB(220,220,220), 0.065)
-makeDivider()
-makeHeader("─ EVENTS ─")
-local eventLbl = makeRow("geen", Color3.fromRGB(150, 255, 150), 0.065)
+local timeLbl = makeRow("⏱ 00:00:00", Color3.fromRGB(140, 200, 255), 0.07)
+local rollsLbl = makeRow("🎲 Rolls: 0", Color3.fromRGB(140, 200, 255), 0.07)
+local buffLbl = makeRow("Buffs: Laden...", Color3.fromRGB(255, 180, 80), 0.065)
+local normalLbl = makeRow("Normal: 0", Color3.fromRGB(210,210,210), 0.065)
+local megaLbl = makeRow("MegaRainbow: 0", Color3.fromRGB(255,100,255), 0.065)
+local upgradeLbl = makeRow("UPGRADES: Laden...", Color3.fromRGB(220,220,220), 0.065)
 
--- ==========================================
--- DATA HELPERS
--- ==========================================
+-- =========================================================================
+-- LOGICA & DATA HELPERS
+-- =========================================================================
 local function getData() return ClientGlobals.PlayerData and ClientGlobals.PlayerData.Data end
+
 local function getDiceCount(diceType)
     local data = getData()
     if not data or not data.Inventory then return 0 end
@@ -411,73 +112,54 @@ local function getDiceCount(diceType)
     end
     return count
 end
-local function getUpgradeLevel(name) local data = getData() return (data and data.RNGUpgrades and data.RNGUpgrades[name]) or 0 end
-local function isUpgradeMaxed(name) local cfg = RNGConfig.Upgrades[name] return cfg and getUpgradeLevel(name) >= cfg.MaxLevel end
-local function countCollectedRarity(targetRarity)
-    local data = getData()
-    if not data or not data.CollectedBrainrots then return 0 end
-    local count = 0
-    for _, brainrots in pairs(data.CollectedBrainrots) do
-        for name, _ in pairs(brainrots) do
-            if BrainrotModule.BrainrotRarities[name] == targetRarity then count += 1 end
-        end
-    end
-    return count
-end
-local function getActiveDiceBuffs()
-    local data = getData()
-    if not data or not data.DiceBuffs then return "geen" end
-    local parts = {}
-    for diceType, buffData in pairs(data.DiceBuffs) do
-        if type(buffData) == "table" and type(buffData.rollsRemaining) == "number" and buffData.rollsRemaining > 0 then
-            table.insert(parts, diceType .. " x" .. buffData.rollsRemaining)
-        end
-    end
-    return #parts > 0 and table.concat(parts, " ") or "geen"
-end
-local function getActiveEvents()
-    local parts = {}
-    local activeData = ClientGlobals.ActiveEvents and ClientGlobals.ActiveEvents.Data
-    if activeData then
-        local short = { RollFrenzyEvent = "RollFrenzy", Dice777Event = "777", Jackpot = "Jackpot" }
-        for eventName, endTime in pairs(activeData) do
-            if type(endTime) == "number" then
-                local t = math.floor(endTime - workspace:GetServerTimeNow())
-                if t > 0 then table.insert(parts, (short[eventName] or eventName) .. " " .. string.format("%d:%02d", math.floor(t/60), t%60)) end
-            end
-        end
-    end
-    return #parts > 0 and table.concat(parts, " | ") or "geen"
-end
-local function formatTime(s) return string.format("%02d:%02d:%02d", math.floor(s/3600), math.floor((s%3600)/60), math.floor(s%60)) end
 
--- ==========================================
+local function getUpgradeLevel(name) 
+    local data = getData() 
+    return (data and data.RNGUpgrades and data.RNGUpgrades[name]) or 0 
+end
+
+local function isUpgradeMaxed(name) 
+    local cfg = RNGConfig.Upgrades[name] 
+    return cfg and getUpgradeLevel(name) >= cfg.MaxLevel 
+end
+
+-- =========================================================================
 -- LIVE UPDATE LOOP
--- ==========================================
+-- =========================================================================
 local startTime = tick()
 local UPGRADES = {"RollSpeed","Luck","InfinityLuck","EternalLuck","TraitLuck"}
+
 task.spawn(function()
     while gui and gui.Parent do
-        timeLbl.Text = "⏱ " .. formatTime(tick() - startTime)
-        rollsLbl.Text = "🎲 Rolls: " .. (_G.MzDRolls or 0)
-        buffLbl.Text = getActiveDiceBuffs()
+        -- Update Counters
+        timeLbl.Text = "⏱ " .. os.date("!%H:%M:%S", tick() - startTime)
+        rollsLbl.Text = "🎲 Rolls: " .. _G.MzDRolls
         normalLbl.Text = "Normal: " .. getDiceCount("Normal")
-        fireLbl.Text = "Fire: " .. getDiceCount("Fire")
-        goldLbl.Text = "Gold: " .. getDiceCount("Gold")
-        rainbowLbl.Text = "Rainbow: " .. getDiceCount("Rainbow")
-        local mc = getDiceCount("MegaRainbow")
-        megaLbl.Text = "MegaRainbow: " .. mc
-        megaLbl.TextColor3 = mc > 0 and Color3.fromRGB(255,100,255) or Color3.fromRGB(80,80,80)
-        infLbl.Text = "♾ Infinity: " .. countCollectedRarity("Infinity")
-        etLbl.Text = "✨ Eternal: " .. countCollectedRarity("Eternal")
-        usedLbl.Text = "🎯 Mega gebruikt: " .. math.floor((_G.MzDRolls or 0) / 5)
-        local allMax = true; local notDone = {}
+        megaLbl.Text = "MegaRainbow: " .. getDiceCount("MegaRainbow")
+        
+        -- Upgrades check
+        local allMax = true
         for _, name in ipairs(UPGRADES) do
-            if not isUpgradeMaxed(name) then allMax = false; table.insert(notDone, name) end
+            if not isUpgradeMaxed(name) then allMax = false break end
         end
-        if allMax then upgradeLbl.Text = "UPGRADES: ✅ ALL MAX"; upgradeLbl.TextColor3 = Color3.fromRGB(80, 255, 80)
-        else upgradeLbl.Text = "🔄 " .. table.concat(notDone, ", "); upgradeLbl.TextColor3 = Color3.fromRGB(255, 195, 60) end
-        eventLbl.Text = getActiveEvents()
-        task.wait(1)
+        upgradeLbl.Text = allMax and "UPGRADES: ✅ ALL MAX" or "UPGRADES: 🔄 Bezig..."
+        
+        -- Buffs (Observer check)
+        local activeBuffs = getData().DiceBuffs
+        buffLbl.Text = activeBuffs and "Buffs: Actief" or "Buffs: Geen"
+        
+        task.wait(0.5)
     end
+end)
+
+-- =========================================================================
+-- LIGHTING / CLEANING (Standaard optimalisatie)
+-- =========================================================================
+pcall(function()
+    for _, obj in ipairs(Lighting:GetChildren()) do
+        if obj:IsA("Sky") or obj:IsA("PostEffect") then obj:Destroy() end
+    end
+    Lighting.Brightness = 0
+    Lighting.OutdoorAmbient = Color3.new(0, 0, 0)
+    Lighting.Ambient = Color3.new(0, 0, 0)
 end)
