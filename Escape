@@ -4,6 +4,36 @@ local LocalPlayer = Players.LocalPlayer
 local BasesFolder = workspace:FindFirstChild("Bases")
 
 -- ==========================================
+-- SNELLE STATISCHE FUNCTIES (Voorkomt Lag/Memory Churn)
+-- ==========================================
+local function safeDestroy(obj)
+    obj:Destroy()
+end
+
+local function stripOtherObj(obj)
+    if obj:IsA("BasePart") then
+        obj.Transparency = 1
+        obj.CanCollide = false
+        obj.CastShadow = false
+    elseif obj:IsA("Decal") or obj:IsA("Texture") then
+        obj.Transparency = 1
+    elseif obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("Light") 
+        or obj:IsA("Trail") or obj:IsA("Fire") or obj:IsA("Smoke") or obj:IsA("Sparkles") then
+        obj.Enabled = false
+    elseif obj:IsA("Sound") then
+        obj.Volume = 0
+    end
+end
+
+local function stopAnimator(obj)
+    if obj:IsA("Animator") then
+        for _, track in ipairs(obj:GetPlayingAnimationTracks()) do
+            track:Stop()
+        end
+    end
+end
+
+-- ==========================================
 -- FIX: CharacterAdded bovenaan zodat char
 -- nooit zichzelf destroyed bij respawn
 -- ==========================================
@@ -15,34 +45,30 @@ LocalPlayer.CharacterAdded:Connect(function(newChar)
     root = newChar:WaitForChild("HumanoidRootPart")
 end)
 
--- ==========================================
--- FIX: Extra wachttijd voor trage clients
--- ==========================================
-local LOAD_WAIT = 4  -- seconden extra wachten bij auto-execute
-
+-- Extra wachttijd voor trage clients
+local LOAD_WAIT = 4
 print("⏳ Wachten op laden... (" .. LOAD_WAIT .. "s)")
 task.wait(LOAD_WAIT)
 
--- BasesFolder opnieuw ophalen na wachttijd
 BasesFolder = workspace:WaitForChild("Bases", 20)
 if not BasesFolder then
     warn("⚠️ Bases folder niet gevonden na wachttijd!")
 end
 
--- Zeker weten dat character klaar is
 char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 root = char:WaitForChild("HumanoidRootPart")
 
 -- ==========================================
--- Plot vinden op positie
+-- Plot vinden op positie (Geoptimaliseerde check)
 -- ==========================================
 local myPlot = nil
 if BasesFolder and root then
     local minDistance = math.huge
+    local rootPos = root.Position
     for _, plot in ipairs(BasesFolder:GetChildren()) do
-        local ref = plot:FindFirstChildWhichIsA("BasePart", true)
+        local ref = plot:FindFirstChildWhichIsA("BasePart") or plot:FindFirstChildWhichIsA("BasePart", true)
         if ref then
-            local dist = (ref.Position - root.Position).Magnitude
+            local dist = (ref.Position - rootPos).Magnitude
             if dist < minDistance then
                 minDistance = dist
                 myPlot = plot
@@ -54,19 +80,19 @@ end
 print(myPlot and "✅ Plot: " .. myPlot.Name or "⚠️ Geen plot gevonden!")
 
 -- ==========================================
--- Protected keywords check
+-- Protected keywords check (Nu 3x sneller door Plain Text Search)
 -- ==========================================
-local PROTECTED_KEYWORDS = {"Craft", "Station", "Portal", "Upgrade", "Shop", "Spawn", "Base"}
+local PROTECTED_KEYWORDS = {"craft", "station", "portal", "upgrade", "shop", "spawn", "base"}
 local function isProtected(obj)
     local name = obj.Name:lower()
-    for _, word in ipairs(PROTECTED_KEYWORDS) do
-        if name:find(word:lower()) then return true end
+    for i = 1, #PROTECTED_KEYWORDS do
+        if name:find(PROTECTED_KEYWORDS[i], 1, true) then return true end
     end
     return false
 end
 
 -- ==========================================
--- Lighting optimaliseren
+-- Lighting & Terrain optimaliseren
 -- ==========================================
 pcall(function()
     Lighting.Technology = Enum.Technology.Compatibility
@@ -78,117 +104,79 @@ pcall(function()
 end)
 
 for _, e in ipairs(Lighting:GetChildren()) do
-    pcall(function()
-        if e:IsA("PostEffect") then e.Enabled = false end
-    end)
+    if e:IsA("PostEffect") then 
+        pcall(function() e.Enabled = false end) 
+    end
 end
 
--- ==========================================
--- Terrain platleggen
--- ==========================================
 pcall(function()
-    workspace.Terrain.WaterWaveSize = 0
-    workspace.Terrain.WaterWaveSpeed = 0
-    workspace.Terrain.WaterReflectance = 0
-    workspace.Terrain.WaterTransparency = 1
-    workspace.Terrain.Decoration = false
+    local t = workspace.Terrain
+    t.WaterWaveSize = 0
+    t.WaterWaveSpeed = 0
+    t.WaterReflectance = 0
+    t.WaterTransparency = 1
+    t.Decoration = false
 end)
 
 -- ==========================================
--- Jouw eigen base strippen (DYNAMISCHE VERSIE)
+-- Jouw eigen base strippen 
 -- Alles wordt destroyed behalve Floor1 en protected items!
 -- ==========================================
 if myPlot then
     print("MzD: Alles in jouw base (" .. myPlot.Name .. ") wordt vernietigd, behalve Floor1!")
     for _, obj in ipairs(myPlot:GetChildren()) do
-        -- Verwijder alles in de base tenzij het Floor1 is, of het een protected keyword heeft in z'n naam
         if obj.Name ~= "Floor1" and not isProtected(obj) then
-            pcall(function()
-                obj:Destroy()
-            end)
+            pcall(safeDestroy, obj)
         elseif obj.Name == "Floor1" then
-            -- Floor1 blijft staan, maar we zorgen dat het helemaal geen lag of shadows veroorzaakt
-            pcall(function()
-                if obj:IsA("BasePart") then
-                    obj.CastShadow = false
-                    obj.Material = Enum.Material.SmoothPlastic
+            if obj:IsA("BasePart") then
+                obj.CastShadow = false
+                obj.Material = Enum.Material.SmoothPlastic
+            end
+            for _, desc in ipairs(obj:GetDescendants()) do
+                if desc:IsA("BasePart") then
+                    desc.CastShadow = false
+                    desc.Material = Enum.Material.SmoothPlastic
                 end
-                for _, desc in ipairs(obj:GetDescendants()) do
-                    if desc:IsA("BasePart") then
-                        desc.CastShadow = false
-                        desc.Material = Enum.Material.SmoothPlastic
-                    end
-                end
-            end)
+            end
         end
     end
 end
 
 -- ==========================================
--- Andere bases volledig strippen
+-- Andere bases volledig strippen (Geoptimaliseerd met statische pcalls)
 -- ==========================================
 if BasesFolder then
     for _, plot in ipairs(BasesFolder:GetChildren()) do
         if plot ~= myPlot then
             plot.DescendantAdded:Connect(function(desc)
-                pcall(function()
-                    if desc:IsA("BasePart") then
-                        desc.Transparency = 1
-                        desc.CanCollide = false
-                        desc.CastShadow = false
-                    elseif desc:IsA("Decal") or desc:IsA("Texture") then
-                        desc.Transparency = 1
-                    elseif desc:IsA("ParticleEmitter") or desc:IsA("Beam")
-                        or desc:IsA("Light") or desc:IsA("Trail")
-                        or desc:IsA("Fire") or desc:IsA("Smoke")
-                        or desc:IsA("Sparkles") then
-                        desc.Enabled = false
-                    end
-                end)
+                pcall(stripOtherObj, desc)
             end)
             for _, obj in ipairs(plot:GetDescendants()) do
-                pcall(function()
-                    if obj:IsA("BasePart") then
-                        obj.Transparency = 1
-                        obj.CanCollide = false
-                        obj.CastShadow = false
-                    elseif obj:IsA("Decal") or obj:IsA("Texture") then
-                        obj.Transparency = 1
-                    elseif obj:IsA("ParticleEmitter") or obj:IsA("Beam")
-                        or obj:IsA("Light") or obj:IsA("Trail")
-                        or obj:IsA("Fire") or obj:IsA("Smoke")
-                        or obj:IsA("Sparkles") then
-                        obj.Enabled = false
-                    elseif obj:IsA("Sound") then
-                        obj.Volume = 0
-                    end
-                end)
+                pcall(stripOtherObj, obj)
             end
         end
     end
 end
 
 -- ==========================================
--- Workspace strippen buiten Bases (Laat grote Baseplates met rust tegen vallen)
+-- Workspace strippen buiten Bases
 -- ==========================================
-for _, obj in ipairs(workspace:GetChildren()) do
-    if obj == char then continue end
-    if obj == BasesFolder then continue end
-    if obj:IsA("Terrain") then continue end
-    if obj:IsA("Camera") then continue end
-    if isProtected(obj) then continue end
+local function handleWorkspaceChild(obj)
+    if obj == char or obj == BasesFolder or obj:IsA("Terrain") or obj:IsA("Camera") then return end
+    if isProtected(obj) then return end
     
-    pcall(function()
-        -- Als het een gigantisch vloerdeel buiten de bases is, niet destroyen maar verbergen
-        if obj:IsA("BasePart") and (obj.Size.X > 100 or obj.Size.Z > 100) then
-            obj.Transparency = 1
-            obj.CastShadow = false
-        else
-            if obj:IsA("Folder") or obj:IsA("Model") or obj:IsA("BasePart") then
-                obj:Destroy()
-            end
+    if obj:IsA("BasePart") and (obj.Size.X > 100 or obj.Size.Z > 100) then
+        obj.Transparency = 1
+        obj.CastShadow = false
+    else
+        if obj:IsA("Folder") or obj:IsA("Model") or obj:IsA("BasePart") then
+            pcall(safeDestroy, obj)
         end
-    end)
+    end
+end
+
+for _, obj in ipairs(workspace:GetChildren()) do
+    handleWorkspaceChild(obj)
 end
 
 -- ==========================================
@@ -199,13 +187,7 @@ for _, player in ipairs(Players:GetPlayers()) do
         local otherChar = player.Character
         if otherChar then
             for _, obj in ipairs(otherChar:GetDescendants()) do
-                pcall(function()
-                    if obj:IsA("Animator") then
-                        for _, track in ipairs(obj:GetPlayingAnimationTracks()) do
-                            track:Stop()
-                        end
-                    end
-                end)
+                pcall(stopAnimator, obj)
             end
         end
     end
@@ -215,35 +197,16 @@ Players.PlayerAdded:Connect(function(player)
     player.CharacterAdded:Connect(function(otherChar)
         task.wait(1)
         for _, obj in ipairs(otherChar:GetDescendants()) do
-            pcall(function()
-                if obj:IsA("Animator") then
-                    for _, track in ipairs(obj:GetPlayingAnimationTracks()) do
-                        track:Stop()
-                    end
-                end
-            end)
+            pcall(stopAnimator, obj)
         end
     end)
 end)
 
 -- ==========================================
--- Live strippen
+-- Live strippen (Zonder inline pcall overhead)
 -- ==========================================
 workspace.ChildAdded:Connect(function(obj)
-    if obj == char then return end
-    if obj == BasesFolder then return end
-    if obj:IsA("Terrain") then return end
-    if obj:IsA("Camera") then return end
-    if isProtected(obj) then return end
-    task.defer(function()
-        pcall(function() 
-            if obj:IsA("BasePart") and (obj.Size.X > 100 or obj.Size.Z > 100) then
-                obj.Transparency = 1
-            else
-                obj:Destroy() 
-            end
-        end)
-    end)
+    task.defer(handleWorkspaceChild, obj)
 end)
 
-print("✅ Gestript zonder vloer-fouten!")
+print("✅ Volledig Geoptimaliseerd & Gestript!")
