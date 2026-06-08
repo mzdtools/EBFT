@@ -47,7 +47,7 @@ end)
 -- ==========================================
 -- WACHTTIJD VOOR TRAGE CLIENTS
 -- ==========================================
-local LOAD_WAIT = 4
+local LOAD_WAIT = 10
 print("⏳ Wachten op laden... (" .. LOAD_WAIT .. "s)")
 task.wait(LOAD_WAIT)
 
