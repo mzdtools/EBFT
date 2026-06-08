@@ -1,249 +1,75 @@
--- =========================================================================
--- MzD ETFB RNG Farm — OPTI SCRIPT
--- Zwart scherm + wereld strippen + max FPS
--- =========================================================================
-local Players    = game:GetService("Players")
-local Lighting   = game:GetService("Lighting")
-local RunService = game:GetService("RunService")
-local StarterGui = game:GetService("StarterGui")
-local LocalPlayer = Players.LocalPlayer
+local Players           = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local StarterGui        = game:GetService("StarterGui")
+local lp                = Players.LocalPlayer
 
--- =========================================================================
--- ROBLOX MENU WEG
--- =========================================================================
+-- Stap 1: Herstel volledige PlayerGui vanuit StarterGui
+print("🔄 PlayerGui herstellen...")
+for _, item in ipairs(StarterGui:GetChildren()) do
+    local existing = lp.PlayerGui:FindFirstChild(item.Name)
+    if existing then existing:Destroy() end
+    local clone = item:Clone()
+    clone.Parent = lp.PlayerGui
+    print("✅ Hersteld: " .. item.Name)
+end
+
+task.wait(1)
+
+-- Stap 2: CoreGui aan
 pcall(function()
-    StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, false)
+    StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, true)
 end)
 
--- =========================================================================
--- CHARACTER + SLIMME AUTO-UNEQUIP
--- =========================================================================
-local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-local root = char:WaitForChild("HumanoidRootPart")
-
-local function setupAutoUnequip(character)
-    local hum = character:FindFirstChildOfClass("Humanoid")
-    if not hum then return end
-    pcall(function() hum:UnequipTools() end)
-    hum.ToolEquipped:Connect(function()
-        task.wait(0.05)
-        pcall(function() hum:UnequipTools() end)
-    end)
+-- Stap 3: Alle ScreenGuis enablen
+for _, gui in ipairs(lp.PlayerGui:GetChildren()) do
+    if gui:IsA("ScreenGui") then
+        gui.Enabled = true
+    end
 end
 
-setupAutoUnequip(char)
-LocalPlayer.CharacterAdded:Connect(function(newChar)
-    char = newChar
-    root = newChar:WaitForChild("HumanoidRootPart")
-    task.wait(0.1)
-    setupAutoUnequip(newChar)
-end)
+task.wait(0.5)
 
--- =========================================================================
--- CAMERA ONDERGRONDS (geen 3D rendering)
--- =========================================================================
-local camera = workspace.CurrentCamera
-camera.CameraType = Enum.CameraType.Scriptable
-camera.CFrame = CFrame.new(0, -50000, 0)
-
-RunService.RenderStepped:Connect(function()
-    if camera.CameraType ~= Enum.CameraType.Scriptable then
-        camera.CameraType = Enum.CameraType.Scriptable
-    end
-    camera.CFrame = CFrame.new(0, -50000, 0)
-end)
-
--- =========================================================================
--- ZWART SCHERM
--- =========================================================================
-local gui = Instance.new("ScreenGui")
-gui.Name           = "MzDBlackScreen"
-gui.ResetOnSpawn   = false
-gui.IgnoreGuiInset = true
-gui.DisplayOrder   = 999
-gui.Parent         = LocalPlayer.PlayerGui
-
-local bg = Instance.new("Frame")
-bg.Size             = UDim2.new(1, 0, 1, 0)
-bg.BackgroundColor3 = Color3.new(0, 0, 0)
-bg.BorderSizePixel  = 0
-bg.Parent           = gui
-
--- =========================================================================
--- WACHTTIJD (trage client / auto-execute)
--- =========================================================================
-print("⏳ MzD Opti laden... (10s)")
-task.wait(10)
-
--- =========================================================================
--- LIGHTING → VOLLEDIG ZWART
--- =========================================================================
+-- Stap 4: MenuManager → trade scherm openen
 pcall(function()
-    for _, obj in ipairs(Lighting:GetChildren()) do
-        if obj:IsA("Sky") or obj:IsA("PostEffect") or obj:IsA("Clouds") then
-            obj:Destroy()
-        end
+    local MenuManager = require(ReplicatedStorage.Client.Modules.MenuManager)
+    -- Probeer alle mogelijke namen
+    for _, name in ipairs({"Trade", "TradeNegotiation", "Trading", "TradingUI", "ActiveNegotiation"}) do
+        pcall(function() MenuManager.open(name) end)
     end
-    Lighting.Technology     = Enum.Technology.Compatibility
-    Lighting.GlobalShadows  = false
-    Lighting.Brightness     = 0
-    Lighting.OutdoorAmbient = Color3.new(0, 0, 0)
-    Lighting.Ambient        = Color3.new(0, 0, 0)
-    Lighting.FogEnd         = 1
-    Lighting.FogColor       = Color3.new(0, 0, 0)
+    print("✅ MenuManager aangeroepen")
 end)
 
--- =========================================================================
--- TERRAIN
--- =========================================================================
+task.wait(0.5)
+
+-- Stap 5: ActiveNegotiation controleren en UI forceren
 pcall(function()
-    workspace.Terrain.WaterWaveSize     = 0
-    workspace.Terrain.WaterWaveSpeed    = 0
-    workspace.Terrain.WaterReflectance  = 0
-    workspace.Terrain.WaterTransparency = 1
-    workspace.Terrain.Decoration        = false
+    local ClientGlobals = require(ReplicatedStorage.Client.Modules.ClientGlobals)
+    local neg = ClientGlobals.ActiveNegotiation and ClientGlobals.ActiveNegotiation.Data
+    if neg then
+        print("✅ ActiveNegotiation actief — trade UI forceren")
+        -- Zoek en toon trade-gerelateerde UI
+        for _, gui in ipairs(lp.PlayerGui:GetChildren()) do
+            if gui.Name:lower():find("trade") or gui.Name:lower():find("negot") then
+                gui.Enabled = true
+                print("✅ Gevonden: " .. gui.Name)
+            end
+        end
+        -- Probeer Menus.Trade direct
+        local menus = lp.PlayerGui:FindFirstChild("Menus")
+        if menus then
+            local trade = menus:FindFirstChild("Trade", true)
+            if trade then
+                trade.Visible = true
+                print("✅ Trade menu zichtbaar gemaakt")
+            end
+        end
+    else
+        print("⚠️ Geen actieve trade onderhandeling gevonden")
+    end
 end)
 
--- =========================================================================
--- WERELD STRIPPEN
--- =========================================================================
-local PROTECTED = {"Craft","Station","Portal","Upgrade","Shop","Spawn","Base"}
-local function isProtected(obj)
-    local name = obj.Name:lower()
-    for _, w in ipairs(PROTECTED) do
-        if name:find(w:lower()) then return true end
-    end
-    return false
-end
+-- Stap 6: Camera normaal
+workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+print("✅ Klaar! Trade scherm zou nu zichtbaar moeten zijn.")
 
-local function stripObject(obj)
-    pcall(function()
-        if obj:IsA("BasePart") then
-            obj.Transparency = 1
-            obj.CanCollide   = false
-            obj.CastShadow   = false
-        elseif obj:IsA("Decal") or obj:IsA("Texture")
-            or obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("Light") then
-            obj:Destroy()
-        elseif obj:IsA("Sound") then
-            obj.Volume = 0
-        end
-    end)
-end
 
--- Plot detecteren
-char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-root = char:WaitForChild("HumanoidRootPart")
-
-local BasesFolder = workspace:WaitForChild("Bases", 20)
-local myPlot = nil
-
-if BasesFolder and root then
-    local minDist = math.huge
-    for _, plot in ipairs(BasesFolder:GetChildren()) do
-        local ref = plot:FindFirstChildWhichIsA("BasePart", true)
-        if ref then
-            local dist = (ref.Position - root.Position).Magnitude
-            if dist < minDist then minDist = dist; myPlot = plot end
-        end
-    end
-end
-
-print(myPlot and "✅ Plot: " .. myPlot.Name or "⚠️ Geen plot gevonden!")
-
--- Eigen base: structuur intact, visuele rommel weg
-if myPlot then
-    for _, obj in ipairs(myPlot:GetDescendants()) do
-        pcall(function()
-            if not isProtected(obj) then
-                if obj:IsA("BasePart") then
-                    obj.CastShadow = false
-                    obj.Material   = Enum.Material.SmoothPlastic
-                elseif obj:IsA("Decal") or obj:IsA("Texture")
-                    or obj:IsA("ParticleEmitter") or obj:IsA("Beam") then
-                    obj:Destroy()
-                end
-            end
-        end)
-    end
-end
-
--- Andere bases: alles strippen + live
-if BasesFolder then
-    for _, plot in ipairs(BasesFolder:GetChildren()) do
-        if plot ~= myPlot then
-            for _, obj in ipairs(plot:GetDescendants()) do
-                stripObject(obj)
-            end
-            plot.DescendantAdded:Connect(function(desc)
-                task.defer(function() stripObject(desc) end)
-            end)
-        end
-    end
-end
-
--- Workspace buiten bases
-for _, obj in ipairs(workspace:GetChildren()) do
-    if obj == char or obj == BasesFolder
-        or obj:IsA("Terrain") or obj:IsA("Camera")
-        or isProtected(obj) then continue end
-    pcall(function()
-        if obj:IsA("BasePart") and (obj.Size.X > 100 or obj.Size.Z > 100) then
-            obj.Transparency = 1
-            obj.CastShadow   = false
-        elseif obj:IsA("Folder") or obj:IsA("Model") or obj:IsA("BasePart") then
-            obj:Destroy()
-        end
-    end)
-end
-
--- Live strippen nieuwe objecten
-workspace.ChildAdded:Connect(function(obj)
-    if obj == char or obj == BasesFolder
-        or obj:IsA("Terrain") or obj:IsA("Camera")
-        or isProtected(obj) then return end
-    task.defer(function()
-        pcall(function()
-            if obj:IsA("BasePart") and (obj.Size.X > 100 or obj.Size.Z > 100) then
-                obj.Transparency = 1
-            else
-                obj:Destroy()
-            end
-        end)
-    end)
-end)
-
--- Animaties andere spelers uit
-for _, player in ipairs(Players:GetPlayers()) do
-    if player ~= LocalPlayer then
-        local otherChar = player.Character
-        if otherChar then
-            for _, obj in ipairs(otherChar:GetDescendants()) do
-                pcall(function()
-                    if obj:IsA("Animator") then
-                        for _, track in ipairs(obj:GetPlayingAnimationTracks()) do
-                            track:Stop()
-                        end
-                    end
-                end)
-            end
-        end
-    end
-end
-
-Players.PlayerAdded:Connect(function(player)
-    player.CharacterAdded:Connect(function(otherChar)
-        task.wait(1)
-        for _, obj in ipairs(otherChar:GetDescendants()) do
-            pcall(function()
-                if obj:IsA("Animator") then
-                    for _, track in ipairs(obj:GetPlayingAnimationTracks()) do
-                        track:Stop()
-                    end
-                end
-            end)
-        end
-    end)
-end)
-
-print("✅ MzD Opti actief!")
