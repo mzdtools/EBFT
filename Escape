@@ -95,25 +95,32 @@ pcall(function()
 end)
 
 -- ==========================================
--- Jouw eigen base strippen (GEFIXED: Geen Destroy op Parts!)
+-- Jouw eigen base strippen (DYNAMISCHE VERSIE)
+-- Alles wordt destroyed behalve Floor1 en protected items!
 -- ==========================================
 if myPlot then
-    for _, obj in ipairs(myPlot:GetDescendants()) do
-        pcall(function()
-            if isProtected(obj) then
-                if obj:IsA("BasePart") then obj.CastShadow = false end
-            -- Verwijder alle brainrot plaatjes en meshes op jouw base
-            elseif obj:IsA("Decal") or obj:IsA("Texture") or obj:IsA("SpecialMesh") or obj:IsA("CharacterMesh") or obj:IsA("Accessory") then
+    print("MzD: Alles in jouw base (" .. myPlot.Name .. ") wordt vernietigd, behalve Floor1!")
+    for _, obj in ipairs(myPlot:GetChildren()) do
+        -- Verwijder alles in de base tenzij het Floor1 is, of het een protected keyword heeft in z'n naam
+        if obj.Name ~= "Floor1" and not isProtected(obj) then
+            pcall(function()
                 obj:Destroy()
-            -- Verwijder alle laggy effecten op jouw base
-            elseif obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("Fire") or obj:IsA("Smoke") or obj:IsA("Sparkles") then
-                obj:Destroy()
-            -- Blokken en vloeren laten we STAAN, we zetten alleen schaduw uit voor FPS
-            elseif obj:IsA("BasePart") then
-                obj.CastShadow = false
-                obj.Material = Enum.Material.SmoothPlastic
-            end
-        end)
+            end)
+        elseif obj.Name == "Floor1" then
+            -- Floor1 blijft staan, maar we zorgen dat het helemaal geen lag of shadows veroorzaakt
+            pcall(function()
+                if obj:IsA("BasePart") then
+                    obj.CastShadow = false
+                    obj.Material = Enum.Material.SmoothPlastic
+                end
+                for _, desc in ipairs(obj:GetDescendants()) do
+                    if desc:IsA("BasePart") then
+                        desc.CastShadow = false
+                        desc.Material = Enum.Material.SmoothPlastic
+                    end
+                end
+            end)
+        end
     end
 end
 
